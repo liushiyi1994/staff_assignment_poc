@@ -1,0 +1,21 @@
+# Local configuration and Python build/test artifacts
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# TAWOS is a large, externally versioned dataset. Keep only provenance in source control.
+data/raw/*
+!data/raw/.gitkeep
+
+# Generated pipeline and benchmark artifacts
+data/parquet/
+data/buckets/
+data/contributions/
+data/eval/
+
+# Local notebook conversion output
+notebooks/*.ipynb

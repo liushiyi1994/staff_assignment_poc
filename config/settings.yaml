@@ -1,0 +1,53 @@
+# All tunables live here. No magic numbers in code.
+
+dataset:
+  # Verify available projects with: python -m capgraph.pipeline.stage0_load --report
+  # Pick 4-6 domain-distinct projects with high assignee coverage. Placeholders below —
+  # replace with real TAWOS project keys after running --report.
+  projects: ["MESOS", "USERGRID", "MULE", "TISTUD"]
+  min_tickets_per_person: 15
+  bot_patterns: ["bot", "jenkins", "ci-", "githubbot", "hudson", "builds"]
+  holdout_cutoff: "2019-01-01"   # graph built from data before; eval briefs from after
+
+bucketing:
+  period: quarter
+  max_tickets_per_bucket: 30     # split larger buckets by component
+  min_tickets_per_bucket: 3      # drop sparser buckets (too little signal)
+  max_description_chars: 1200    # truncate long descriptions
+  include_comments_if_empty: true
+
+llm:
+  # Verify current model strings against https://docs.claude.com before first run.
+  extraction_model: "claude-haiku-4-5-20251001"
+  intent_model: "claude-sonnet-5"
+  rerank_model: "claude-sonnet-5"
+  temperature: 0.0
+  max_stage_cost_usd: 25.0
+
+embedding:
+  model: "BAAI/bge-small-en-v1.5"   # local, 384 dims; changing requires index rebuild
+  dims: 384
+
+normalization:
+  skill_merge_threshold: 0.85       # cosine sim for merging skill terms
+  specialization_merge_threshold: 0.80
+
+projections:
+  recency_half_life_days: 540
+
+retrieval:
+  vector_top_k: 40
+  structured_top_k: 40
+  rerank_top_k: 15
+
+scoring:
+  weights:
+    specialization_match: 0.40
+    skill_overlap: 0.25
+    recency: 0.20
+    evidence_strength: 0.15
+
+eval:
+  n_briefs: 150
+  min_brief_chars: 300     # briefs need enough text to be meaningful
+  recall_at: [5, 10]

@@ -1,0 +1,38 @@
+[project]
+name = "capgraph"
+version = "0.1.0"
+description = "Capability Graph PoC - evidence-backed staffing recommendations from Jira data"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40",
+    "neo4j>=5.25",
+    "pandas>=2.2",
+    "pyarrow>=17.0",
+    "pymysql>=1.1",
+    "sqlalchemy>=2.0",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "pyyaml>=6.0",
+    "sentence-transformers>=3.0",
+    "scikit-learn>=1.5",
+    "rank-bm25>=0.2",
+    "tenacity>=9.0",
+    "tqdm>=4.66",
+    "rich>=13.0",
+    "python-dotenv>=1.0",
+    "beautifulsoup4>=4.12",
+]
+
+[project.optional-dependencies]
+demo = ["jupyter>=1.0", "jupytext>=1.16", "pyvis>=0.3", "matplotlib>=3.9"]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
