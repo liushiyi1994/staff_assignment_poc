@@ -1,5 +1,6 @@
 # Local configuration and Python build/test artifacts
-.env
+.env*
+!.env.example
 .venv/
 __pycache__/
 *.py[cod]
@@ -11,11 +12,17 @@ __pycache__/
 data/raw/*
 !data/raw/.gitkeep
 
-# Generated pipeline and benchmark artifacts
-data/parquet/
+# Generated pipeline and benchmark artifacts. Keep the reproducible all-project
+# selection report reviewable; normalized parquet and MySQL cross-checks stay local.
+data/parquet/*
+!data/parquet/slice_report.csv
+!data/parquet/slice_report.md
+!data/parquet/slice_report.metadata.json
 data/buckets/
-data/contributions/
+data/contributions/*
+!data/contributions/term_overrides.yaml
 data/eval/
+data/llm_costs*.jsonl
 
 # Local notebook conversion output
 notebooks/*.ipynb

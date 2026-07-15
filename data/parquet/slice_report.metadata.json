@@ -1,0 +1,20 @@
+{
+  "effective_parameters": {
+    "cutoff": "2019-01-01 00:00:00",
+    "min_brief_chars": 300,
+    "min_tickets_per_person": 15,
+    "recommended_projects": [
+      "MESOS",
+      "FAB",
+      "TIMOB",
+      "DM",
+      "EVG"
+    ]
+  },
+  "report_metadata_version": 1,
+  "source_archive": {
+    "filename": "TAWOS.sql.zip",
+    "sha256": "278984f788008c58d338e1f4aa195eae8e5b15b4153e51c247659ef8465917f7",
+    "size_bytes": 637550449
+  }
+}

@@ -1,20 +1,26 @@
 # All tunables live here. No magic numbers in code.
 
 dataset:
-  # Verify available projects with: python -m capgraph.pipeline.stage0_load --report
-  # Pick 4-6 domain-distinct projects with high assignee coverage. Placeholders below —
-  # replace with real TAWOS project keys after running --report.
-  projects: ["MESOS", "USERGRID", "MULE", "TISTUD"]
+  # Selected from data/parquet/slice_report.* (TAWOS v1.1). Person identities remain
+  # project-qualified; do not merge the same numeric User.ID across projects.
+  projects: ["MESOS", "FAB", "TIMOB", "DM", "EVG"]
+  project_domains:
+    MESOS: "cluster orchestration and distributed systems"
+    FAB: "distributed ledger and blockchain infrastructure"
+    TIMOB: "mobile application SDK and runtime"
+    DM: "scientific data management and observatory pipelines"
+    EVG: "database build, test, and continuous integration"
   min_tickets_per_person: 15
-  bot_patterns: ["bot", "jenkins", "ci-", "githubbot", "hudson", "builds"]
   holdout_cutoff: "2019-01-01"   # graph built from data before; eval briefs from after
 
 bucketing:
   period: quarter
-  max_tickets_per_bucket: 30     # split larger buckets by component
+  max_tickets_per_bucket: 30     # deterministically chunk larger buckets
   min_tickets_per_bucket: 3      # drop sparser buckets (too little signal)
   max_description_chars: 1200    # truncate long descriptions
-  include_comments_if_empty: true
+  # Comments are deliberately excluded: they postdate issue creation and cannot be
+  # exposed safely in creation-time benchmark queries without timestamped evidence.
+  include_comments_if_empty: false
 
 llm:
   # Verify current model strings against https://docs.claude.com before first run.
@@ -50,4 +56,7 @@ scoring:
 eval:
   n_briefs: 150
   min_brief_chars: 300     # briefs need enough text to be meaningful
-  recall_at: [5, 10]
+  seed: 20260713
+  manifest_version: "tawos-v1.1-benchmark-v1"
+  validation_fraction: 0.20
+  hit_at: [1, 5, 10]

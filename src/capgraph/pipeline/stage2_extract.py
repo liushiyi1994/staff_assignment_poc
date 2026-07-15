@@ -22,7 +22,9 @@ def format_tickets(bucket: Bucket) -> str:
     for t in bucket.tickets:
         desc = f" | {t.description}" if t.description else ""
         comps = f" [components: {', '.join(t.components)}]" if t.components else ""
-        lines.append(f"- {t.key} ({t.type or 'Task'}, {t.resolution or 'open'}): {t.summary}{comps}{desc}")
+        # Stage 1 deliberately redacts mutable final-snapshot type/resolution
+        # fields from the historical evidence view.
+        lines.append(f"- {t.key}: {t.summary}{comps}{desc}")
     return "\n".join(lines)
 
 
@@ -53,11 +55,13 @@ def extract_one(bucket: Bucket) -> Contribution:
 
 
 def main(force: bool = False) -> None:
-    buckets = [Bucket.model_validate_json(l) for l in open(BUCKETS_PATH)]
+    buckets = [Bucket.model_validate_json(line) for line in open(BUCKETS_PATH)]
     RAW_PATH.parent.mkdir(parents=True, exist_ok=True)
     done: set[str] = set()
     if RAW_PATH.exists() and not force:
-        done = {Contribution.model_validate_json(l).contribution_id for l in open(RAW_PATH)}
+        done = {
+            Contribution.model_validate_json(line).contribution_id for line in open(RAW_PATH)
+        }
     mode = "w" if force else "a"
     with open(RAW_PATH, mode) as f:
         for b in tqdm([b for b in buckets if b.bucket_id not in done], desc="extracting"):

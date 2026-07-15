@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 Strength = Literal["primary", "secondary"]
 Confidence = Literal["high", "medium", "low"]
@@ -18,22 +18,39 @@ Fit = Literal["strong", "good", "related"]
 # ---------- Stage 0/1: tickets and buckets ----------
 
 class Ticket(BaseModel):
+    source_issue_id: str              # stable TAWOS Issue.ID; keys/projects can move
     key: str
     project_key: str
-    person_id: str                    # normalized assignee id
-    person_name: str
+    # ``person_*`` is the final-snapshot assignee kept for source audit only. It
+    # is not profile evidence or benchmark truth because it may reflect a later
+    # reassignment. Unassigned issues remain in the audit-complete Stage 0 export.
+    person_id: str | None = None
+    person_name: str | None = None
+    # Profile ownership and benchmark truth are reconstructed independently from
+    # the assignee change log at resolution time. Stage 1/benchmark use these.
+    evidence_person_id: str | None = None
+    evidence_person_name: str | None = None
     type: str | None = None
     summary: str
+    summary_provenance: str = "snapshot_no_recorded_change"
     description: str | None = None    # markup-stripped, truncated
+    description_provenance: str = "snapshot_no_recorded_change"
     components: list[str] = []
+    components_provenance: str = "snapshot_no_recorded_change"
     labels: list[str] = []
     resolution: str | None = None
+    snapshot_resolved_at: datetime | None = None  # final dump value, audit-only
     resolved_at: datetime | None = None
+    resolved_at_provenance: str = "snapshot_no_recorded_resolution_change"
     created_at: datetime | None = None
+    query_time_source: Literal["created_at"] = "created_at"
+    temporal_exclusion_reason: str | None = None
+    assigned_at: datetime | None = None
+    assignee_provenance: str = "final_snapshot_no_recorded_change"
 
 
 class Bucket(BaseModel):
-    """Extraction unit: one person x project x period (optionally split by component)."""
+    """Extraction unit: one person x project x period, stably size-chunked."""
     bucket_id: str                    # f"{person_id}|{project_key}|{period}|{split}"
     person_id: str
     person_name: str
@@ -143,16 +160,27 @@ class QueryResult(BaseModel):
 # ---------- Eval ----------
 
 class EvalBrief(BaseModel):
+    """Legacy selected-case view; the versioned benchmark manifest is authoritative."""
+
     brief_id: str
     text: str                         # name-stripped
     project_key: str
-    resolved_at: datetime
+    as_of_time: datetime | None = None  # query time; normally issue creation
+    resolved_at: datetime | None = None  # outcome metadata, never query time
+    eligible_roster: list[str] = []
     true_person_ids: list[str]        # ground truth assignee(s)
 
 
 class EvalResult(BaseModel):
     system: str                       # "capgraph" | "bm25" | "vector_only" | "most_active"
+    hit_at_1: float
+    hit_at_5: float
+    hit_at_10: float
     recall_at_5: float
     recall_at_10: float
     mrr: float
+    candidate_recall: float | None = None
     n_briefs: int
+    latency_ms_mean: float = 0.0
+    latency_ms_p95: float = 0.0
+    cost_usd_total: float = 0.0

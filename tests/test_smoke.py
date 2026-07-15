@@ -10,13 +10,23 @@ from capgraph.query.rank import score_candidate
 from capgraph.eval.run_eval import mrr, recall_at_k
 
 
-def _tickets_df(n: int, person="p1", project="PROJ", month=3) -> pd.DataFrame:
+def _tickets_df(n: int, person="p1", project="MESOS", month=3) -> pd.DataFrame:
     return pd.DataFrame([{
+        "source_issue_id": str(i),
         "key": f"{project}-{i}", "project_key": project, "person_id": person,
         "person_name": "Pat Doe", "type": "Bug", "summary": f"Fix thing {i}",
-        "description": None, "components": ["core"], "labels": [],
-        "resolution": "Fixed", "resolved_at": datetime(2018, month, 10),
-        "created_at": datetime(2018, month, 1),
+        "evidence_person_id": person, "evidence_person_name": "Pat Doe",
+        "summary_provenance": "snapshot_no_recorded_change",
+        "description": None,
+        "description_provenance": "empty_snapshot_no_recorded_change",
+        "components": ["core"],
+        "components_provenance": "snapshot_no_recorded_change", "labels": [],
+        "resolution": "Fixed",
+        "snapshot_resolved_at": datetime(2018, month, 10),
+        "resolved_at": datetime(2018, month, 10),
+        "resolved_at_provenance": "snapshot_no_recorded_resolution_change",
+        "created_at": datetime(2018, month, 1), "query_time_source": "created_at",
+        "temporal_exclusion_reason": None,
     } for i in range(n)])
 
 
@@ -39,7 +49,7 @@ def test_bucketing_respects_holdout_cutoff():
 
 
 def test_period_end_and_decay():
-    assert period_end("2018-Q3") == date(2018, 9, 28)
+    assert period_end("2018-Q3") == date(2018, 9, 30)
     assert decay(date(2020, 1, 1), 540, as_of=date(2020, 1, 1)) == 1.0
     half = decay(date(2020, 1, 1), 540, as_of=date(2021, 6, 24))  # ~540 days
     assert 0.45 < half < 0.55

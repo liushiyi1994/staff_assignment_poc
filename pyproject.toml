@@ -1,14 +1,14 @@
 [project]
 name = "capgraph"
 version = "0.1.0"
-description = "Capability Graph PoC - evidence-backed staffing recommendations from Jira data"
+description = "Research PoC for evaluating evidence-backed capability retrieval on public Jira data"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.40",
     "neo4j>=5.25",
     "pandas>=2.2",
     "pyarrow>=17.0",
-    "pymysql>=1.1",
+    "pymysql[rsa]>=1.1",
     "sqlalchemy>=2.0",
     "pydantic>=2.9",
     "pydantic-settings>=2.5",

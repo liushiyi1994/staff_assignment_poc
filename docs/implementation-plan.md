@@ -1,18 +1,76 @@
 # Implementation Plan
 
-Ordered tasks with acceptance criteria. Work top-down; each task is a good Claude Code session. Already implemented and reusable as-is: models, settings, llm gateway, embeddings, stage1 (bucketing), stage3 (normalization), stage4 (projections), scoring + rerank, eval metrics, all prompts. Tasks below fill in the dataset- and Neo4j-dependent parts.
+Ordered tasks with acceptance criteria. The current benchmark-foundation phase ends
+after provenance, Stage 0, manifest construction, and focused fixture tests. Do
+not run stages 2–5 or call an LLM during this phase. Later tasks remain here as a
+roadmap and require separate authorization.
+
+## Task 0 — pin the source artifact
+
+Download official TAWOS v1.1 `TAWOS.sql.zip` into `data/raw/` only when absent,
+verify the published MD5, compute SHA-256, and record the source record/DOI,
+content version, download date, byte size, checksums, Apache-2.0 license, ethics
+and research-only usage terms, and identity limitations in
+`docs/data-provenance.md`. Keep the archive out of version control and do not
+make another copy. This repository remains research/evaluation work and is not
+production employment decision support.
+
+Accept: the local archive is exactly 637,550,449 bytes; MD5 is
+`e9c5ecc7649d55f0cf2fb4efb5664494`; provenance contains the verified SHA-256;
+the ignore rules cover `data/raw/TAWOS.sql.zip`.
 
 ## Task 1 — stage0: TAWOS → parquet
 
-1. `make db-up && make restore-tawos`, then `stage0 --introspect`; fix the SQL in `export()` and `report()` against the real schema (join issues → assignee user → project; aggregate components/labels).
-2. Implement `report()`; use it to pick 4–6 domain-distinct, high-assignee-coverage projects; update `config/settings.yaml` `dataset.projects` with real keys and add a short `domain` label per project.
-3. Implement `export()` including markup stripping, bot filtering, min-tickets filter.
+1. Use the official v1.1 schema. If a compatible MySQL service is available,
+   restore the dump and spot-check via `stage0 --introspect`; Docker Compose is a
+   convenience, not a prerequisite for fixture-based implementation. Docker is
+   unavailable in the current environment, so do not install Docker Desktop or a
+   system service silently.
+2. Implement `report()` across all projects. Report total/resolved tickets,
+   assignee coverage, non-empty summary/description coverage, distinct assignees,
+   date range, pre/post-cutoff counts, people with ≥15 pre-cutoff resolved tickets,
+   and plausible post-cutoff held-out briefs. Save the deterministic report under
+   `data/parquet/`.
+3. Use that report to recommend 4–6 domain-distinct projects. The measured
+   recommendation is MESOS, FAB, TIMOB, DM, and EVG: 82,703 source issues,
+   62,554 created before cutoff, 316 people meeting the pre-cutoff ticket
+   threshold, and 3,594 upper-bound plausible held-out briefs before
+   retained-profile and creation-text exclusions. USERGRID/MULE yield no usable
+   briefs, provisional TISTUD has only 17 after temporal exclusions, and CXX's
+   15-person/23-brief pool is too small for useful Hit@10 analysis. Store an
+   explicit domain for every configured project and populate
+   `Bucket.project_domain`.
+4. Implement `export()` against the actual Project, Issue, project-local User,
+   Component, and Comment structures. Use `<project_key>:<user_id>` person IDs and
+   `Person <project_key>-<user_id>` pseudonyms. Emit `labels: []` because v1.1 has
+   no labels table; do not invent names or cross-project identity.
+5. Apply roster and minimum-ticket filters using pre-cutoff resolved history only.
+   Emit a person only when that history also produces at least one retained
+   person×project×quarter Stage 1 bucket under the configured size bounds.
+   V1.1's opaque user IDs do not permit name-based bot detection; do not filter a
+   person using invented signals or the generated pseudonym. Clean Jira/HTML
+   markup and aggregate components deterministically for Stage 0 audit. Reconstruct
+   creation text and resolution owner from `Change_Log`; exclude project/key moves,
+   explicit resolution-date edits, undated resolution changes, and latest
+   transitions that clear resolution from temporal evidence. Preserve a stable
+   numeric source issue ID. Comments are deliberately
+   excluded rather than used as a fallback. Unversioned component names and final
+   assignment/status fields must be redacted from Stage 1 evidence.
 
-Accept: `tickets.parquet` rows validate against `models.Ticket`; ≥150 people survive the filter; spot-check 10 rows against the MySQL source; `report()` output saved to `data/parquet/slice_report.md`.
+Accept: normalized rows validate against `models.Ticket`; join, pseudonym, markup,
+component audit, project-domain, report-statistic, change-log exclusion, and pre-cutoff roster behavior pass
+real-schema fixtures; `data/parquet/slice_report.*` is reproducible, source-verified,
+and accompanied by digest/effective-parameter metadata. When MySQL is
+available, spot-check 10 exported rows against the restored source.
 
 ## Task 2 — run stage1, sanity-check buckets
 
-Accept: bucket count within 1–3× people count × avg active quarters; no bucket > `max_tickets_per_bucket`; eyeball 5 buckets for coherence (`data/buckets/buckets.jsonl`).
+Accept later: bucket count within 1–3× people count × avg active quarters; every
+qualifying ticket appears exactly once after deterministic rebalancing; every
+Stage 0 person has a retained bucket; no bucket violates configured size bounds
+when a valid partition exists; evidence tickets contain no final outcome or
+unversioned component-name fields; eyeball 5 buckets for coherence
+(`data/buckets/buckets.jsonl`).
 
 ## Task 3 — stage2 extraction + quality pass
 
@@ -39,19 +97,40 @@ Implement `generate_candidates` (vector arm + structured arm, union, parameteriz
 
 Accept: end-to-end query < 15s; every ranked person's reason cites evidence that exists in their profile; at least one brief shows a person found by vector arm only (proves union matters).
 
-## Task 7 — eval harness
+## Task 7 — deterministic temporal benchmark foundation
 
-Implement `holdout.build_briefs()` (with the name-stripping leakage guard), `baselines.py` (pre-cutoff data only), and `run_eval.main()` (results table → `data/eval/results.md`, plus a bar chart PNG for the notebook).
+1. Define query time from issue creation or a defensible recorded assignment event,
+   never eventual resolution. Expose no description/comment/evidence created after
+   query time. Freeze candidate eligibility and activity features from pre-query
+   history, and calculate recency at the cutoff/query time rather than today.
+2. Build a deterministic, versioned manifest containing stable TAWOS issue ID,
+   final Jira key for audit, query text, as-of time, project, same-project eligible
+   roster, truth IDs, split, and exclusion reason.
+   Use a fixed seed and deterministic project stratification. Strip explicit
+   project-qualified IDs/pseudonyms, mentions, and emails from query text.
+3. Keep every baseline on the identical historical information budget. The
+   assignee reconstructed at the safe resolution boundary is ground truth for
+   assignee prediction, not evidence of optimal fit; final assignment is audit-only.
+4. Rename the existing binary Recall@K behavior to Hit@K (or separately implement
+   true set Recall@K). Plan overall and per-project Hit@1/5/10, MRR, candidate
+   recall, latency, and cost.
 
-Accept: 150 briefs built, zero briefs containing roster names (regex-verify); all 4 systems produce results; capgraph beats bm25 and most_active on Recall@5 (if it doesn't, debug retrieval before touching weights — most likely candidate-generation recall is the problem, check whether truth people appear in the candidate pool at all).
+Accept for the foundation phase: manifest bytes are stable across repeated builds
+with the same inputs/version/seed; every included truth ID is in its recorded
+eligible roster; every selected truth and roster ID has a retained Stage 1 profile
+bucket; leakage guard tests reject future evidence and identifiers; split and
+exclusion counts reconcile with source candidates. Running retrieval systems and
+LLM evaluation is deferred.
 
 ## Task 8 — demo notebook + delta batch
 
 1. Flesh out `notebooks/demo.py` (skeleton provided): the 5-section flow in `docs/tech-design.md` §9, pyvis subgraph viz.
 2. Delta-batch demo: re-run stages 1–5 with cutoff moved one quarter later, using stage5 idempotent upserts; show one person's profile before/after.
 
-Accept: `make demo` runs top-to-bottom clean on a fresh kernel; total runtime < 10 min excluding pipeline.
+Accept later: `make demo` runs top-to-bottom clean on a fresh kernel; total runtime < 10 min excluding pipeline. Synthetic profiles, if ever used in a qualitative demo, remain physically separate from and are never scored in the quantitative benchmark.
 
 ## Task 9 — polish
 
-Ruff clean, `make test` green, README setup verified on a fresh clone, record 3 strongest demo queries + eval numbers into `docs/demo-script.md`.
+Ruff clean, `make test` green, README setup verified on a fresh clone, provenance
+and generated-artifact instructions current, and (in the later evaluation phase)
+record 3 strongest demo queries + eval numbers into `docs/demo-script.md`.

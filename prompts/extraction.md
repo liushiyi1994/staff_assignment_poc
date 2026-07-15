@@ -8,7 +8,9 @@ You are analyzing a software engineer's Jira ticket history to extract an eviden
 {{tickets}}
 </tickets>
 
-Each ticket shows: key, type, summary, description (truncated), components, labels, resolution.
+Each ticket shows only the leakage-safe evidence view: stable key, creation-time
+summary/description (description truncated). Mutable final type, resolution,
+assignee, and unversioned component-name fields are deliberately absent.
 
 Produce ONE contribution record for this person on this project in this period.
 
@@ -17,8 +19,8 @@ Rules:
 - `contribution_summary`: 2-4 sentences, specific and concrete — what they built/fixed/led, in which subsystem. Written for a staffing reviewer, not a performance review. No superlatives.
 - `specializations`: 1-3 coarse capability areas (e.g. "Distributed systems backend", "Frontend web development", "Data pipeline engineering", "DevOps / build infrastructure"). `strength` is "primary" if most tickets support it, else "secondary".
 - `skills`: 3-10 fine-grained, evidence-supported skills — technologies, subsystems, techniques (e.g. "Kafka", "memory leak debugging", "CI pipeline configuration"). Use the terms the tickets use.
-- `confidence`: "high" if ≥5 resolved tickets clearly support the summary; "medium" if signal is thinner or tickets are vague; "low" if you are mostly guessing (prefer returning fewer skills over guessing).
-- `reason`: one sentence explaining the confidence, citing ticket counts/types.
+- `confidence`: "high" if ≥5 evidence tickets clearly support the summary; "medium" if signal is thinner or tickets are vague; "low" if you are mostly guessing (prefer returning fewer skills over guessing).
+- `reason`: one sentence explaining the confidence, citing evidence-ticket counts and concrete text signals.
 - `evidence_ticket_keys`: the 3-8 ticket keys that best support the summary.
 - If tickets are trivial or too vague to support any capability claim, return `"skip": true` with a one-line reason.
 

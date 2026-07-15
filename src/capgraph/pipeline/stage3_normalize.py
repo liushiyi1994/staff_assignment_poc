@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from collections import Counter
 
-import numpy as np
 import yaml
 from sklearn.cluster import AgglomerativeClustering
 
@@ -74,7 +73,7 @@ def cluster_terms(terms: list[str], threshold: float, kind: str, overrides: dict
 
 
 def main() -> None:
-    contribs = [Contribution.model_validate_json(l) for l in open(RAW_PATH)]
+    contribs = [Contribution.model_validate_json(line) for line in open(RAW_PATH)]
     contribs = [c for c in contribs if not c.skip]
     overrides = load_overrides()
 

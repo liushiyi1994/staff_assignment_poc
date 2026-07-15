@@ -1,6 +1,10 @@
 # Capability Graph PoC
 
-Staffing recommendation PoC: extract evidence-backed capability profiles from public Jira data (TAWOS), store in Neo4j (graph + vector index), answer natural-language project briefs with ranked, explainable shortlists.
+Research/evaluation PoC: extract evidence-backed capability profiles from public
+Jira data (TAWOS), store them in Neo4j (graph + vector index), and evaluate
+ranked, explainable retrieval against historical assignments. It is not
+production employment decision support and must not be used for real hiring,
+staffing, promotion, performance, or other employment decisions.
 
 Read `docs/tech-design.md` (full design + trade-offs) and `docs/implementation-plan.md` (ordered tasks with acceptance criteria) before implementing anything.
 
@@ -12,13 +16,13 @@ MySQL (TAWOS dump) → parquet → person×project×quarter buckets → LLM extr
 Part B — query engine (`src/capgraph/query/`):
 brief → LLM intent parse → candidate generation (vector search ∪ Cypher skill filter) → subgraph expansion → weighted score → LLM re-rank top-15 with reasons → shortlist with evidence ticket keys.
 
-Eval (`src/capgraph/eval/`): deterministic temporal holdout — history and the eligible roster are frozen before each benchmark query time, later issues become "briefs", and ground truth is the historical assignee. Report Hit@1/5/10, MRR, candidate recall, per-project results, latency, and cost vs BM25 / vector-only / most-active baselines. Historical assignment is a prediction target, not proof of optimal qualification.
+Eval (`src/capgraph/eval/`): deterministic temporal holdout — history and the same-project eligible roster are frozen before each benchmark query time, later issues become "briefs", and ground truth is the assignee reconstructed at the safe resolution boundary. Report Hit@1/5/10, MRR, candidate recall, per-project results, latency, and cost vs BM25 / vector-only / most-active baselines. Historical assignment is a prediction target, not proof of optimal qualification.
 
 ## Non-negotiable design decisions
 
 Do not "improve" these without asking — they are deliberate trade-offs (rationale in docs/tech-design.md §7):
 
-1. Extraction granularity is person × project × quarter buckets (split >30 tickets by component). Never per-ticket, never whole-history.
+1. Extraction granularity is person × project × quarter buckets (deterministically chunk >30 tickets). Never per-ticket, never whole-history.
 2. Raw tickets stay OUT of Neo4j. They live in parquet (`data/parquet/`); Contribution nodes carry `evidence_ticket_keys` as provenance pointers.
 3. Candidate generation is the UNION of vector and structured retrieval, not intersection.
 4. Deterministic weighted score first, LLM re-rank only on top-K. Never LLM-rank the full candidate pool.
@@ -49,10 +53,10 @@ Do not "improve" these without asking — they are deliberate trade-offs (ration
 ## Gotchas
 
 - TAWOS v1.1 has 458,232 issues, 39 projects, and 12 repositories. Its `User` table contains only `ID` and `Project_ID`: use `<project_key>:<user_id>` IDs and `Person <project_key>-<user_id>` pseudonyms, and never infer names or cross-project identity. The schema has no labels table, so Stage 0 emits an empty labels list. See `docs/data-provenance.md`.
-- TAWOS quirks: descriptions contain Jira wiki markup/HTML (strip it); many empty descriptions can use comments only when those comments existed by the relevant as-of time; bot/CI-like IDs need conservative filtering; some projects have low assignee coverage — use the complete Stage 0 report before choosing the project slice.
+- TAWOS quirks: descriptions contain Jira wiki markup/HTML (strip it); empty descriptions stay empty rather than using later comments; final project/key snapshots can reflect moves and resolution metadata can be edited or internally inconsistent, so Stage 0 keeps those rows for audit but explicitly excludes them from temporal evidence. Unversioned component names and final assignment/status fields are redacted from Stage 1. Opaque user IDs do not support name-based bot filtering; use the complete report as the source of the configured slice.
 - TAWOS table/column names must match the official v1.1 schema. Do not trust guessed names or obsolete v1.0 documentation.
-- Benchmark leakage: query time comes from issue creation or a defensible recorded assignment event, never eventual resolution. Do not expose fields/comments created later, derive the roster and minimum-ticket eligibility only from earlier history, and calculate recency at the cutoff/query time rather than `date.today()`.
-- Every benchmark build writes a deterministic, versioned manifest containing issue ID, query text, as-of time, project, eligible roster, truth IDs, split, and any exclusion reason. Use a fixed seed and deterministic project stratification.
+- Benchmark leakage: query time comes from issue creation or a defensible recorded assignment event, never eventual resolution. Do not expose fields/comments created later, derive the roster and minimum-ticket eligibility only from earlier history, require every roster/truth ID to have a retained Stage 1 profile bucket, and calculate recency at the cutoff/query time rather than `date.today()`. Benchmark truth is the project-qualified assignee reconstructed at the safe resolution boundary; the final assignee snapshot is audit-only.
+- Every benchmark build writes a deterministic, versioned manifest containing stable TAWOS issue ID, final Jira key for audit, query text, as-of time, project, eligible roster, truth IDs, split, and any exclusion reason. Use a fixed seed and deterministic project stratification.
 - Neo4j vector index needs fixed dimensions — set by `embedding.model` in settings (default bge-small-en-v1.5, 384 dims). Changing the model requires dropping/recreating the index and re-embedding.
 - Embedding model downloads ~130MB from HuggingFace on first run.
 

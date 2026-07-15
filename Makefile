@@ -9,12 +9,15 @@ db-up:
 db-down:
 	docker compose down
 
-# One-time. Expects the TAWOS .sql dump in data/raw/. Slow (large dump).
+# One-time. Streams the official zip directly so the 4.3 GB SQL member is not duplicated.
 restore-tawos:
-	@DUMP=$$(ls data/raw/*.sql 2>/dev/null | head -1); \
-	if [ -z "$$DUMP" ]; then echo "Put the TAWOS .sql dump in data/raw/ first"; exit 1; fi; \
-	echo "Restoring $$DUMP ..."; \
-	docker compose exec -T mysql sh -c 'mysql -uroot -pcapgraph-local tawos' < $$DUMP
+	@if [ -f data/raw/TAWOS.sql.zip ]; then \
+		echo "Streaming data/raw/TAWOS.sql.zip into MySQL ..."; \
+		bash -o pipefail -c 'unzip -p data/raw/TAWOS.sql.zip | docker compose exec -T mysql mysql --max_allowed_packet=1G -uroot -pcapgraph-local tawos'; \
+	else \
+		echo "Download the official TAWOS.sql.zip into data/raw/ first"; \
+		exit 1; \
+	fi
 
 stage0:
 	uv run python -m capgraph.pipeline.stage0_load

@@ -13,6 +13,7 @@ must not be committed or copied into another project path.
 | Official record | <https://rdr.ucl.ac.uk/articles/dataset/The_TAWOS_dataset/21308124> |
 | DOI | <https://doi.org/10.5522/04/21308124.v1> |
 | Official schema | <https://github.com/SOLAR-group/TAWOS/blob/main/TAWOS_Database_Schema_Creation_Script.sql> |
+| Official terms | <https://github.com/SOLAR-group/TAWOS#terms-of-use> |
 | Archive | `TAWOS.sql.zip` |
 | Local path | `data/raw/TAWOS.sql.zip` (local only) |
 | Download date | 2026-07-13 |
@@ -25,6 +26,28 @@ must not be committed or copied into another project path.
 The UCL record's article metadata reports article version 1; “TAWOS v1.1” is
 the dataset content release described by that record. Local byte size and both
 checksums were verified after download.
+
+Reproduce the local verification from the repository root on macOS:
+
+```bash
+wc -c < data/raw/TAWOS.sql.zip
+md5 -q data/raw/TAWOS.sql.zip
+shasum -a 256 data/raw/TAWOS.sql.zip
+```
+
+The complete project report can be reproduced without extracting the 4.31 GB SQL
+member or running MySQL:
+
+```bash
+python scripts/tawos_slice_report.py
+```
+
+Before parsing, the report script verifies the archive's pinned byte size and
+SHA-256. The streaming parser then validates the expected 458,232 issues, 39
+projects, and 12 repositories before replacing
+`data/parquet/slice_report.{csv,md}` and the machine-readable
+`data/parquet/slice_report.metadata.json`. Report metadata records the verified
+archive identity and all effective settings-backed parameters.
 
 ## Release facts used by this PoC
 
@@ -40,21 +63,34 @@ repository therefore treats a user as project-local:
 
 - `person_id` is `<project_key>:<user_id>`;
 - `person_name` is the explicit pseudonym `Person <project_key>-<user_id>`;
-- no cross-project identity resolution is attempted; and
-- historical assignee is benchmark ground truth for assignee prediction, not
-  evidence that the assignee was the uniquely or optimally qualified person.
+- no cross-project identity resolution is attempted;
+- generated pseudonyms are not evidence for bot/name filtering; and
+- the project-qualified assignee reconstructed at the safe resolution boundary is
+  benchmark ground truth for assignee prediction; the final dump snapshot is
+  audit-only, and neither is evidence of uniquely optimal qualification.
 
 The official schema has no labels table. Stage 0 emits `labels: []` rather than
-inventing label values. Components and comments may be joined from their real
-schema tables, subject to the benchmark's as-of-time leakage rules.
+inventing label values. Components and comments are joined for source audit/report
+coverage, but later comments and unversioned component names are not exposed to
+temporal evidence.
 
 ## License, ethics, and handling
 
-The dataset is distributed under the Apache License 2.0. The official record
-also includes research and ethics terms discouraging harmful use and attempts
-to re-identify people. This PoC preserves opaque, project-qualified identifiers,
-uses pseudonymous display values, and does not claim that records across projects
-belong to the same person.
+The dataset is distributed under the Apache License 2.0, but that license is not
+the whole upstream usage policy. The TAWOS project's official
+[Terms of Use](https://github.com/SOLAR-group/TAWOS#terms-of-use) state that the
+dataset is published for researchers for research purposes only, that uses which
+may harm contributing users or project owners should be prohibited, and that
+users must consider potential ethical issues. The terms also strongly discourage
+attempts to trace the redacted records back to individual contributors.
+
+Accordingly, this repository is a research and evaluation PoC for historical
+assignment prediction. It is not production employment decision support and must
+not be used to make or recommend real hiring, staffing, promotion, performance,
+or other employment decisions. This PoC preserves opaque, project-qualified
+identifiers, uses pseudonymous display values, and does not claim that records
+across projects belong to the same person or that a historical assignee was the
+best-qualified person.
 
 The large archive stays under `data/raw/` and is excluded from version control.
 Derived reports and benchmark manifests should record their generation settings,
