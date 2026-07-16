@@ -12,6 +12,7 @@ from datetime import date, datetime
 import pandas as pd
 
 from ..models import Bucket, Ticket
+from ..privacy import LeakageSanitizer, roster_identifiers
 from ..settings import DATA_DIR, settings
 
 BUCKETS_PATH = DATA_DIR / "buckets" / "buckets.jsonl"
@@ -107,17 +108,22 @@ def validate_profile_evidence(
         raise ValueError("unsafe resolution-time provenance in historical evidence")
 
 
-def _evidence_ticket(row: dict) -> Ticket:
+def _evidence_ticket(row: dict, sanitizer: LeakageSanitizer) -> Ticket:
     """Create the historical view without final-snapshot assignment metadata."""
     description = row.get("description")
     if description is not None and bool(pd.isna(description)):
         description = None
+    if description is not None:
+        description = sanitizer.strip(str(description))
+    summary = row.get("summary")
+    summary = "" if summary is None or bool(pd.isna(summary)) else str(summary)
     payload = {
         **row,
+        "summary": sanitizer.strip(summary),
+        "description": description,
         "person_id": None,
         "person_name": None,
         "type": None,
-        "description": description,
         "resolution": None,
         "snapshot_resolved_at": None,
         "assigned_at": None,
@@ -327,6 +333,13 @@ def build_buckets(
                 + ", ".join(sorted(missing_profiles))
             )
         df = df[df["bucket_person_id"].isin(eligible_person_ids)].copy()
+        identifier_mask = tickets["evidence_person_id"].astype("string").isin(
+            eligible_person_ids
+        )
+        identifier_source = tickets.loc[identifier_mask]
+    else:
+        identifier_source = tickets
+    sanitizer = LeakageSanitizer(roster_identifiers(identifier_source))
     df["period"] = df["resolved_at"].map(quarter_of)
     # MySQL does not guarantee row order, and chunk boundaries are part of the
     # extraction contract. Always stabilize rows before grouping and splitting.
@@ -361,7 +374,10 @@ def build_buckets(
                     project_key=str(project_key),
                     project_domain=_project_domain(str(project_key)),
                     period=str(period),
-                    tickets=[_evidence_ticket(row) for row in g.to_dict("records")],
+                    tickets=[
+                        _evidence_ticket(row, sanitizer)
+                        for row in g.to_dict("records")
+                    ],
                 )
             )
     return buckets

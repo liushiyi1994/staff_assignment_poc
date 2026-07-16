@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from capgraph.pipeline.stage1_bucket import build_buckets
+from capgraph.privacy import contains_leakage, roster_identifiers
 from capgraph.settings import settings
 
 
@@ -144,6 +145,28 @@ def test_stage1_uses_resolution_owner_not_eventual_assignee(bucket_settings):
         ticket.components_provenance == "redacted_unversioned_component_name"
         for ticket in buckets[0].tickets
     )
+
+
+def test_stage1_sanitizes_identity_patterns_before_profile_extraction(
+    bucket_settings,
+):
+    tickets = pd.DataFrame(_rows("PROJ:1", 3))
+    tickets.loc[0, "summary"] = "Ask PROJ:1 and Person PROJ-1 or @reviewer"
+    tickets.loc[0, "description"] = (
+        "Contact alice@example.com or [~legacy.user] before release."
+    )
+    tickets.loc[0, "description_provenance"] = "snapshot_no_recorded_change"
+
+    buckets = build_buckets(tickets, eligible_person_ids={"PROJ:1"})
+
+    identifiers = roster_identifiers(tickets)
+    evidence = buckets[0].tickets[0]
+    assert not contains_leakage(evidence.summary, identifiers)
+    assert evidence.description is not None
+    assert not contains_leakage(evidence.description, identifiers)
+    assert "[PERSON]" in evidence.summary
+    assert "[MENTION]" in evidence.summary
+    assert "[EMAIL]" in evidence.description
 
 
 def test_missing_project_domain_fails_instead_of_emitting_blank(monkeypatch):

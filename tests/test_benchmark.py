@@ -11,11 +11,8 @@ from capgraph.eval.holdout import (
     MANIFEST_VERSION,
     BenchmarkManifestEntry,
     build_manifest,
-    contains_leakage,
     filter_history_as_of,
     freeze_eligible_roster,
-    roster_identifiers,
-    strip_leakage,
     write_manifest,
 )
 from capgraph.eval.run_eval import (
@@ -32,6 +29,7 @@ from capgraph.eval.run_eval import (
 from capgraph.models import Contribution, SkillRef
 from capgraph.pipeline.stage1_bucket import build_buckets, retained_profile_person_ids
 from capgraph.pipeline.stage4_project import build_capabilities
+from capgraph.privacy import contains_leakage, roster_identifiers, strip_leakage
 from capgraph.settings import settings
 
 

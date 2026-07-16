@@ -22,7 +22,6 @@ explicit and auditable; later comments are never substituted into query text.
 from __future__ import annotations
 
 import hashlib
-import re
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -32,6 +31,7 @@ import pandas as pd
 from pydantic import BaseModel, Field
 
 from ..models import EvalBrief
+from ..privacy import LeakageSanitizer, roster_identifiers
 from ..pipeline.stage1_bucket import (
     profile_eligible_person_ids,
     validate_profile_evidence,
@@ -42,11 +42,6 @@ MANIFEST_VERSION = str(settings.get("eval.manifest_version", "tawos-v1.1-benchma
 DEFAULT_SEED = 20260713
 MANIFEST_PATH = DATA_DIR / "eval" / "benchmark_manifest.v1.jsonl"
 BRIEFS_PATH = DATA_DIR / "eval" / "briefs.jsonl"
-
-_EMAIL_RE = re.compile(r"(?i)(?<![\w.+-])[\w.+-]+@[\w.-]+\.[a-z]{2,}(?![\w.-])")
-_MENTION_RE = re.compile(r"(?<![\w@])@[a-zA-Z0-9][\w.-]*")
-_JIRA_WIKI_MENTION_RE = re.compile(r"(?i)\[(?:~|user:)[^\]\r\n]+\]")
-
 
 class BenchmarkManifestEntry(BaseModel):
     """One auditable benchmark decision, selected or excluded."""
@@ -87,65 +82,6 @@ def _text(value: object) -> str:
     if value is None or pd.isna(value):
         return ""
     return str(value).strip()
-
-
-def roster_identifiers(people: pd.DataFrame) -> list[str]:
-    """Return safe-to-strip project-qualified IDs and explicit pseudonyms.
-
-    The TAWOS User table has no names or cross-project identity.  Stage 0 therefore
-    emits project-qualified IDs and pseudonyms.  Numeric ID suffixes are not stripped
-    on their own because doing so would corrupt ordinary issue numbers and versions.
-    """
-    identifiers: set[str] = set()
-    for column in ("person_id", "person_name"):
-        if column not in people:
-            continue
-        for value in people[column].dropna():
-            candidate = str(value).strip()
-            if len(candidate) >= 3:
-                identifiers.add(candidate)
-    return sorted(identifiers, key=lambda value: (-len(value), value.casefold()))
-
-
-def _identifier_pattern(identifiers: list[str]) -> re.Pattern[str] | None:
-    if not identifiers:
-        return None
-    alternatives = "|".join(re.escape(value) for value in identifiers)
-    # ``\b`` does not protect Jira/user identifiers ending in punctuation.  These
-    # look-arounds prevent matching inside a longer alphanumeric identifier instead.
-    return re.compile(rf"(?i)(?<!\w)(?:{alternatives})(?!\w)")
-
-
-def strip_leakage(text: str, identifiers: list[str]) -> str:
-    """Remove roster IDs plus e-mail, modern, and Jira-wiki mentions."""
-    # Normalize first: a Jira wiki mention can span a source newline, and the
-    # final whitespace collapse would otherwise turn an initially non-matching
-    # value into detectable leakage after sanitization.
-    cleaned = re.sub(r"\s+", " ", text).strip()
-    pattern = _identifier_pattern(identifiers)
-    # Repeat to a fixed point because one replacement can close a previously
-    # unterminated Jira token. For example, replacing a later ``@mention`` with
-    # ``[MENTION]`` can make an earlier ``[~ ...`` newly matchable.
-    while True:
-        previous = cleaned
-        cleaned = _EMAIL_RE.sub("[EMAIL]", cleaned)
-        cleaned = _JIRA_WIKI_MENTION_RE.sub("[MENTION]", cleaned)
-        cleaned = _MENTION_RE.sub("[MENTION]", cleaned)
-        if pattern is not None:
-            cleaned = pattern.sub("[PERSON]", cleaned)
-        if cleaned == previous:
-            return cleaned
-
-
-def contains_leakage(text: str, identifiers: list[str]) -> bool:
-    """Return whether a supposedly sanitized brief still contains an identifier."""
-    pattern = _identifier_pattern(identifiers)
-    return bool(
-        _EMAIL_RE.search(text)
-        or _JIRA_WIKI_MENTION_RE.search(text)
-        or _MENTION_RE.search(text)
-        or (pattern and pattern.search(text))
-    )
 
 
 def filter_history_as_of(
@@ -388,6 +324,7 @@ def build_manifest(
     )
     identifier_source = people if people is not None else tickets
     identifiers = roster_identifiers(identifier_source)
+    sanitizer = LeakageSanitizer(identifiers)
     profile_person_ids: set[str] | None = None
     if people is not None:
         if "person_id" not in people:
@@ -454,7 +391,7 @@ def build_manifest(
         raw_text = "\n\n".join(
             part for part in (_text(row.get("summary")), _text(row.get("description"))) if part
         )
-        query_text = strip_leakage(raw_text, identifiers)
+        query_text = sanitizer.strip(raw_text)
 
         # Missing stable IDs are retained with a deterministic content fingerprint.
         if not issue_id:
@@ -494,7 +431,7 @@ def build_manifest(
             exclusion_reason = "unsafe_query_text_provenance"
         elif len(query_text) < min_brief_chars:
             exclusion_reason = "brief_too_short"
-        elif contains_leakage(query_text, identifiers):
+        elif sanitizer.contains(query_text):
             exclusion_reason = "leakage_guard_failed"
 
         entry = BenchmarkManifestEntry(
