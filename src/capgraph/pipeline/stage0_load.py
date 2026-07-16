@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 from bs4 import BeautifulSoup
 from sqlalchemy import bindparam, create_engine, text
 
@@ -66,6 +68,7 @@ ISSUES_SQL = text(
       ON u.`ID` = i.`Assignee_ID`
      AND u.`Project_ID` = p.`ID`
     WHERE p.`Project_Key` IN :project_keys
+    ORDER BY p.`Project_Key`, i.`ID`
     """
 ).bindparams(bindparam("project_keys", expanding=True))
 
@@ -953,6 +956,23 @@ def _validate_ticket_sample(tickets: pd.DataFrame, sample_size: int = 25) -> Non
         Ticket.model_validate(record)
 
 
+def _write_parquet(
+    frame: pd.DataFrame,
+    path: Path,
+    *,
+    string_list_columns: Sequence[str] = (),
+) -> None:
+    """Write stable Arrow list types even when every observed list is empty."""
+    table = pa.Table.from_pandas(frame, preserve_index=False)
+    for column in string_list_columns:
+        position = table.schema.get_field_index(column)
+        if position < 0:
+            raise ValueError(f"missing configured list column: {column}")
+        values = pa.array(frame[column].tolist(), type=pa.list_(pa.string()))
+        table = table.set_column(position, column, values)
+    pq.write_table(table, path)
+
+
 def export(
     engine=None,
     output_dir: Path = PARQUET_DIR,
@@ -985,9 +1005,17 @@ def export(
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    tickets.to_parquet(output_dir / "tickets.parquet", index=False)
-    people.to_parquet(output_dir / "people.parquet", index=False)
-    projects.to_parquet(output_dir / "projects.parquet", index=False)
+    _write_parquet(
+        tickets,
+        output_dir / "tickets.parquet",
+        string_list_columns=("components", "labels"),
+    )
+    _write_parquet(
+        people,
+        output_dir / "people.parquet",
+        string_list_columns=("project_keys",),
+    )
+    _write_parquet(projects, output_dir / "projects.parquet")
 
     print(
         f"Wrote {len(tickets):,} audit-complete tickets and {len(people):,} eligible people "

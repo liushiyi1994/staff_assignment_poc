@@ -4,10 +4,13 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from sqlalchemy import create_engine, event
 
 from capgraph.pipeline.stage0_load import (
+    ISSUES_SQL,
     _eligible_person_ids,
     export,
     report,
@@ -226,11 +229,38 @@ def test_export_uses_real_joins_and_pseudonymous_project_scoped_ids(tawos_engine
     assert people.iloc[0]["ticket_count"] == 15
     assert "total_exported_ticket_count" not in people
     assert projects.iloc[0]["domain"] == "distributed systems"
+    assert list(
+        zip(tickets["project_key"], tickets["source_issue_id"].astype(int), strict=True)
+    ) == sorted(
+        zip(tickets["project_key"], tickets["source_issue_id"].astype(int), strict=True)
+    )
     assert {path.name for path in tmp_path.iterdir()} == {
         "tickets.parquet",
         "people.parquet",
         "projects.parquet",
     }
+    ticket_schema = pq.read_schema(tmp_path / "tickets.parquet")
+    people_schema = pq.read_schema(tmp_path / "people.parquet")
+    assert ticket_schema.field("components").type == pa.list_(pa.string())
+    assert ticket_schema.field("labels").type == pa.list_(pa.string())
+    assert people_schema.field("project_keys").type == pa.list_(pa.string())
+    round_trip_tickets = pd.read_parquet(tmp_path / "tickets.parquet")
+    round_trip_people = pd.read_parquet(tmp_path / "people.parquet")
+    assert round_trip_tickets["components"].map(list).tolist() == tickets[
+        "components"
+    ].map(list).tolist()
+    assert round_trip_tickets["labels"].map(list).tolist() == tickets["labels"].map(
+        list
+    ).tolist()
+    assert round_trip_people["project_keys"].map(list).tolist() == people[
+        "project_keys"
+    ].map(list).tolist()
+
+
+def test_issue_query_has_an_explicit_stable_order() -> None:
+    normalized_sql = " ".join(str(ISSUES_SQL).split())
+
+    assert normalized_sql.endswith("ORDER BY p.`Project_Key`, i.`ID`")
 
 
 def test_roster_threshold_never_counts_post_cutoff_tickets(stage0_settings):

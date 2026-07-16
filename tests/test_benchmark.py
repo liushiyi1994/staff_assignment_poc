@@ -15,6 +15,7 @@ from capgraph.eval.holdout import (
     filter_history_as_of,
     freeze_eligible_roster,
     roster_identifiers,
+    strip_leakage,
     write_manifest,
 )
 from capgraph.eval.run_eval import (
@@ -134,6 +135,29 @@ def test_manifest_uses_creation_time_and_strips_roster_leakage() -> None:
     assert "@reviewer" not in entry.query_text
     assert "[~legacy.user]" not in entry.query_text
     assert "[user:account-42]" not in entry.query_text
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (
+            "Coordinate with [~legacy.user\naccount] before the release.",
+            "Coordinate with [MENTION] before the release.",
+        ),
+        (
+            "Coordinate with [~ an unfinished token and ping @reviewer",
+            "Coordinate with [MENTION]",
+        ),
+    ],
+)
+def test_strip_leakage_handles_mentions_exposed_by_normalization(
+    query: str, expected: str
+) -> None:
+
+    cleaned = strip_leakage(query, [])
+
+    assert cleaned == expected
+    assert not contains_leakage(cleaned, [])
 
 
 def test_history_and_roster_are_strictly_pre_query_and_pre_cutoff() -> None:

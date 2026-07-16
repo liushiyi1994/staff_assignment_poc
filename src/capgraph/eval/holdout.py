@@ -118,13 +118,23 @@ def _identifier_pattern(identifiers: list[str]) -> re.Pattern[str] | None:
 
 def strip_leakage(text: str, identifiers: list[str]) -> str:
     """Remove roster IDs plus e-mail, modern, and Jira-wiki mentions."""
-    cleaned = _EMAIL_RE.sub("[EMAIL]", text)
-    cleaned = _JIRA_WIKI_MENTION_RE.sub("[MENTION]", cleaned)
-    cleaned = _MENTION_RE.sub("[MENTION]", cleaned)
+    # Normalize first: a Jira wiki mention can span a source newline, and the
+    # final whitespace collapse would otherwise turn an initially non-matching
+    # value into detectable leakage after sanitization.
+    cleaned = re.sub(r"\s+", " ", text).strip()
     pattern = _identifier_pattern(identifiers)
-    if pattern is not None:
-        cleaned = pattern.sub("[PERSON]", cleaned)
-    return re.sub(r"\s+", " ", cleaned).strip()
+    # Repeat to a fixed point because one replacement can close a previously
+    # unterminated Jira token. For example, replacing a later ``@mention`` with
+    # ``[MENTION]`` can make an earlier ``[~ ...`` newly matchable.
+    while True:
+        previous = cleaned
+        cleaned = _EMAIL_RE.sub("[EMAIL]", cleaned)
+        cleaned = _JIRA_WIKI_MENTION_RE.sub("[MENTION]", cleaned)
+        cleaned = _MENTION_RE.sub("[MENTION]", cleaned)
+        if pattern is not None:
+            cleaned = pattern.sub("[PERSON]", cleaned)
+        if cleaned == previous:
+            return cleaned
 
 
 def contains_leakage(text: str, identifiers: list[str]) -> bool:
