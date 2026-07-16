@@ -21,11 +21,10 @@ the ignore rules cover `data/raw/TAWOS.sql.zip`.
 
 ## Task 1 — stage0: TAWOS → parquet
 
-1. Use the official v1.1 schema. If a compatible MySQL service is available,
-   restore the dump and spot-check via `stage0 --introspect`; Docker Compose is a
-   convenience, not a prerequisite for fixture-based implementation. Docker is
-   unavailable in the current environment, so do not install Docker Desktop or a
-   system service silently.
+1. Use the official v1.1 schema. Restore the dump and spot-check via
+   `stage0 --introspect`; Docker Compose is a convenience, not a prerequisite for
+   fixture-based implementation. The accepted run used MySQL 8.4.10 under Colima;
+   see `docs/real-data-validation.md`.
 2. Implement `report()` across all projects. Report total/resolved tickets,
    assignee coverage, non-empty summary/description coverage, distinct assignees,
    date range, pre/post-cutoff counts, people with ≥15 pre-cutoff resolved tickets,
@@ -63,14 +62,25 @@ real-schema fixtures; `data/parquet/slice_report.*` is reproducible, source-veri
 and accompanied by digest/effective-parameter metadata. When MySQL is
 available, spot-check 10 exported rows against the restored source.
 
+Status: accepted on 2026-07-16. The restore contained 458,232 issues, the export
+contained 82,703 tickets and 316 people, and the deterministic source audit passed
+10/10 categories. Exact hashes and invariant counts are in
+`docs/real-data-validation.md`.
+
 ## Task 2 — run stage1, sanity-check buckets
 
-Accept later: bucket count within 1–3× people count × avg active quarters; every
+Accept: bucket count within 1–3× people count × avg active quarters; every
 qualifying ticket appears exactly once after deterministic rebalancing; every
 Stage 0 person has a retained bucket; no bucket violates configured size bounds
 when a valid partition exists; evidence tickets contain no final outcome or
 unversioned component-name fields; eyeball 5 buckets for coherence
 (`data/buckets/buckets.jsonl`).
+
+Status: automated acceptance passed on 2026-07-16 with 2,668 buckets, 316 people,
+37,475 conserved tickets, size range 3–30, and zero identity, duplication,
+conservation, redaction, or residual contact-pattern violations. A deterministic
+five-bucket qualitative review passed 5/5 after shared privacy sanitization. See
+`docs/real-data-validation.md`.
 
 ## Task 3 — stage2 extraction + quality pass
 
@@ -121,6 +131,11 @@ eligible roster; every selected truth and roster ID has a retained Stage 1 profi
 bucket; leakage guard tests reject future evidence and identifiers; split and
 exclusion counts reconcile with source candidates. Running retrieval systems and
 LLM evaluation is deferred.
+
+Status: accepted on 2026-07-16 with 24,522 candidates, 3,320 pre-sampling eligible
+cases, and 150 selected cases (30 validation / 120 test). Repeated manifest builds
+were byte-identical and all temporal, roster, profile-support, and leakage checks
+passed. See `docs/real-data-validation.md`.
 
 ## Task 8 — demo notebook + delta batch
 

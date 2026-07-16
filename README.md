@@ -2,7 +2,9 @@
 
 Research and evaluation of evidence-backed capability retrieval using historical
 public Jira data. See `docs/tech-design.md` for the full design and
-`docs/implementation-plan.md` for the build order. This repository is an
+`docs/implementation-plan.md` for the build order and
+[`docs/real-data-validation.md`](docs/real-data-validation.md) for the accepted
+TAWOS restore/export/benchmark run. This repository is an
 implementation scaffold: interfaces, prompts, config, and contracts are in
 place; stages marked TODO have acceptance criteria.
 
@@ -43,7 +45,7 @@ than fabricating any of those fields.
 
 ```bash
 uv sync
-uv run pytest
+uv run python -m pytest
 python scripts/tawos_slice_report.py  # streams the zip; no MySQL restore required
 ```
 
@@ -55,6 +57,9 @@ make restore-tawos          # one-time restore; slow
 uv run python -m capgraph.pipeline.stage0_load --introspect
 uv run python -m capgraph.pipeline.stage0_load --report
 uv run python -m capgraph.pipeline.stage0_load
+uv run python -m capgraph.pipeline.stage1_bucket
+uv run python -m capgraph.eval.holdout
+uv run python scripts/validate_tawos_source_audit.py
 ```
 
 The configured five-project slice—MESOS, FAB, TIMOB, DM, and EVG—was selected
@@ -69,6 +74,11 @@ Reproduce the report before changing the slice or cutoff. When MySQL is availabl
 `slice_report_mysql.{md,csv}` cross-check so it cannot overwrite the canonical
 archive-stream report. The later graph, retrieval, and LLM stages remain outside
 the current foundation scope.
+
+The accepted real-data run produced 2,668 deterministic Stage 1 buckets and a
+24,522-row manifest with 150 selected cases (30 validation, 120 test). All source,
+temporal, roster, conservation, and leakage invariants passed; generated datasets
+remain local and ignored.
 
 ## Layout
 

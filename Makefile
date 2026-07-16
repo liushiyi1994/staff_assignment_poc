@@ -41,7 +41,7 @@ eval:
 	uv run python -m capgraph.eval.run_eval
 
 test:
-	uv run pytest -q
+	uv run python -m pytest -q
 
 demo:
 	uv run jupytext --to notebook notebooks/demo.py && uv run jupyter lab notebooks/demo.ipynb
