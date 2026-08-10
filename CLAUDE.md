@@ -7,6 +7,23 @@ production employment decision support and must not be used for real hiring,
 staffing, promotion, performance, or other employment decisions.
 
 Read `docs/tech-design.md` (full design + trade-offs) and `docs/implementation-plan.md` (ordered tasks with acceptance criteria) before implementing anything.
+When resuming after benchmark-foundation acceptance or choosing the next implementation track, read `docs/agent-handoff.md` first.
+Direction: the research track is active (`docs/direction-decision.md`); the product MVP is a later, separately scoped phase.
+
+## Operating model
+
+This project runs as a session hierarchy; identify which role your session plays before doing anything:
+
+- **Orchestrator** (single session, Fable 5): owns direction, decisions, work orders, review, and acceptance. Does not implement.
+- **Phase leads** (optional, Fable 5): own one stage or phase, may split its work order into smaller ones, review worker output, and report acceptance evidence to the orchestrator.
+- **Workers** (separate sessions, e.g. Codex or Opus 5): implement exactly one work order from `docs/work-orders/`, on the branch it names, and report back in its requested format.
+
+Rules:
+
+- Direction decisions live in `docs/direction-decision.md`; active tasking lives in `docs/work-orders/` (one file per order, with status, scope, and acceptance criteria).
+- Workers implement only what their work order scopes. Scope changes, blockers, and discovered design problems are escalated to the orchestrator, not improvised.
+- Work is accepted by the orchestrator (or delegated lead) against the order's acceptance criteria before follow-on work orders are issued.
+- LLM/API calls, credentials, and spend ceilings require explicit orchestrator-recorded approval per order; work orders state whether any call is permitted.
 
 ## Architecture (1-minute version)
 
