@@ -1,0 +1,899 @@
+# All tunables live here. No magic numbers in code.
+
+dataset:
+  # Selected from data/parquet/slice_report.* (TAWOS v1.1). Person identities remain
+  # project-qualified; do not merge the same numeric User.ID across projects.
+  projects: ["MESOS", "FAB", "TIMOB", "DM", "EVG"]
+  project_domains:
+    MESOS: "cluster orchestration and distributed systems"
+    FAB: "distributed ledger and blockchain infrastructure"
+    TIMOB: "mobile application SDK and runtime"
+    DM: "scientific data management and observatory pipelines"
+    EVG: "database build, test, and continuous integration"
+  min_tickets_per_person: 15
+  holdout_cutoff: "2019-01-01"   # graph built from data before; eval briefs from after
+
+bucketing:
+  period: quarter
+  max_tickets_per_bucket: 30     # deterministically chunk larger buckets
+  min_tickets_per_bucket: 3      # drop sparser buckets (too little signal)
+  max_description_chars: 1200    # truncate long descriptions
+  # Backlog G1: truncation cuts at the last sentence end inside the budget rather than
+  # mid-word, but only when that keeps at least this share of the budget. Below it the
+  # cut falls back to the last word boundary, so one very long opening sentence loses a
+  # few trailing characters instead of the whole description.
+  min_truncation_keep_fraction: 0.6
+  # Comments are deliberately excluded: they postdate issue creation and cannot be
+  # exposed safely in creation-time benchmark queries without timestamped evidence.
+  include_comments_if_empty: false
+
+llm:
+  # Routing is per model, never global: a model absent from this map is refused
+  # rather than posted to whichever endpoint happened to be configured. Supported
+  # providers are "anthropic" (native Messages API) and "openrouter"
+  # (OpenAI-compatible chat completions); any other value is refused.
+  model_providers:
+    claude-haiku-4-5-20251001: anthropic
+    claude-sonnet-5: anthropic
+    openai/gpt-5.6-luna: openrouter
+    openai/gpt-5.6-terra: openrouter
+    # Benchmark-v3 finisher model (docs/work-orders/benchmark-v3.md lever 5).
+    openai/gpt-5.6-sol: openrouter
+  openrouter_base_url: "https://openrouter.ai/api/v1"
+  request_timeout_seconds: 120
+  # Stage 2 extraction runs on OpenRouter per the 2026-08-10 owner decision.
+  # Verify Claude model strings against https://docs.claude.com before first run.
+  extraction_model: "openai/gpt-5.6-luna"
+  # Query engine models: orchestrator-approved deviation from the design's
+  # Claude-Sonnet default, recorded in docs/work-orders/stage6-query-engine.md.
+  intent_model: "openai/gpt-5.6-terra"
+  rerank_model: "openai/gpt-5.6-terra"
+  # Which prompts/*.md the re-rank loads. The prompt decides how the shortlist is
+  # ordered, so it is part of the ranking configuration and is named here rather than
+  # hard-coded in query/rank.py. "rerank" is the v1 benchmark prompt;
+  # "rerank_assignee" is the benchmark-v2 revision, which was measured on the
+  # validation split and NOT adopted: it scored below the unrevised prompt on every
+  # metric (docs/benchmark-v2-config.md). The file is kept as the record of that
+  # experiment; this setting is what decides which prompt actually runs.
+  # "rerank_cards" is the benchmark-v3 revision that renders each candidate as a
+  # compact card (retrieval.rerank_candidate_view: card); its citation and validation
+  # rules are carried over verbatim, because query/rank.py's evidence validator
+  # depends on them.
+  rerank_prompt: "rerank_cards"
+  # Strong-model finisher (benchmark-v3 lever 5): one setwise ordering pass over the
+  # head of the re-ranked list. Inert while retrieval.finisher_top_k is 0.
+  finisher_model: "openai/gpt-5.6-sol"
+  finisher_prompt: "rerank_finisher"
+  # The finisher answers with an ordering of at most retrieval.finisher_top_k ids and
+  # no prose, so the *answer* is tiny — but sol is a reasoning model and its reasoning
+  # is billed as output. Measured on the first validation cases: an allowance of 400
+  # truncated the answer mid-JSON on 3 calls out of 4, each costing a full retry. This
+  # is the largest allowance whose worst-case cost still fits max_call_cost_usd: the
+  # longest manifest brief with five maximal cards estimates 2,362 input tokens, so at
+  # sol's $5/$30 per MTok a 1,200-token allowance lands at $0.0478 of the $0.05
+  # ceiling and 1,400 would be refused before the request was sent.
+  finisher_max_output_tokens: 1200
+  # Stage name every query-engine call is logged and budgeted under. The Stage 6
+  # smoke run draws the pilot ceiling; a full eval run gets its own stage name.
+  query_stage: "stage6_pilot"
+  temperature: 0.0
+  max_output_tokens: 1500          # default output allowance per call
+  # A re-rank answers for up to retrieval.rerank_top_k people at once, so its output
+  # allowance is sized from the window rather than fixed: one entry per candidate.
+  # Measured over the Stage 6 smoke briefs and the v1/v2 runs: 1506 to 1917 tokens for
+  # 15 entries (~128 each), and a 2000 cap truncated one answer mid-JSON, which cost a
+  # full retry. base + per_candidate x 15 reproduces the v1/v2 allowance of 3000
+  # exactly, so widening the window is the only thing that changes the request.
+  rerank_output_tokens_base: 900
+  rerank_output_tokens_per_candidate: 140
+  # Absolute cap on that allowance, whatever the window. It also sets the call's
+  # worst-case cost estimate, which must fit max_call_cost_usd.
+  rerank_max_output_tokens: 6000
+  # Output allowance under retrieval.rerank_mode: permutation. The answer is an ordering
+  # of at most 32 ids (~200 tokens), so this is almost entirely headroom for a reasoning
+  # model's billed reasoning. Sized against the authorized per-call ceiling for the
+  # rerank-probes study: the widest card window estimates 8,790 input tokens, so at
+  # sol's $5/$30 per MTok a 3,000-token allowance lands at $0.1339 of the $0.15 the
+  # owner scoped for that study's calls, and 3,600 would be refused before sending.
+  rerank_permutation_output_tokens: 3000
+  max_stage_cost_usd: 25.0
+  # Pilot spend is budgeted and logged separately from a full stage run: any
+  # stage name ending in "_pilot" draws on this ceiling instead.
+  pilot_budget_usd: 1.00
+  # Hard per-call ceiling, checked before the request is sent.
+  max_call_cost_usd: 0.05
+  # Deterministic offline token estimate for pre-call cost control. No tokenizer
+  # call and no network; deliberately coarse, so keep it conservative (low).
+  chars_per_token_estimate: 3.5
+  # USD per million tokens. A model absent from this map is refused, never
+  # priced at $0. Verify Claude prices against
+  # https://docs.claude.com/en/docs/about-claude/pricing and OpenRouter prices
+  # against the models API (https://openrouter.ai/api/v1/models), whose
+  # per-token values are 1e6x smaller than the per-MTok values recorded here.
+  pricing_usd_per_mtok:
+    claude-haiku-4-5-20251001:
+      input: 1.0
+      output: 5.0
+    claude-sonnet-5:
+      input: 3.0
+      output: 15.0
+    # Verified against the OpenRouter models API on 2026-08-10:
+    # pricing.prompt 0.0000001, pricing.completion 0.0000006, context 1,050,000.
+    openai/gpt-5.6-luna:
+      input: 0.10
+      output: 0.60
+    # Query-engine model. Verified against the OpenRouter models API on
+    # 2026-08-10: pricing.prompt 0.000001, pricing.completion 0.000006.
+    openai/gpt-5.6-terra:
+      input: 1.00
+      output: 6.00
+    # Benchmark-v3 finisher. Verified against the OpenRouter models API on
+    # 2026-08-12: pricing.prompt 0.000005, pricing.completion 0.00003,
+    # context 1,050,000. 5x terra's input and output price, which is why the finisher
+    # is given the top-5 cards and nothing else.
+    openai/gpt-5.6-sol:
+      input: 5.00
+      output: 30.00
+
+extraction:
+  # Gate for a stage 2 run: (validated contributions + validated skips) / attempted.
+  min_valid_rate: 0.90
+  pilot:
+    manifest_version: "stage2-pilot-v1"
+    seed: 20260810
+    buckets_per_project: 6         # x 5 configured projects = 30 pilot buckets
+
+embedding:
+  model: "BAAI/bge-small-en-v1.5"   # local, 384 dims; changing requires index rebuild
+  dims: 384
+
+normalization:
+  skill_merge_threshold: 0.85       # cosine sim for merging skill terms
+  specialization_merge_threshold: 0.80
+  # Extraction rubric (prompts/extraction.md): "high" confidence requires at least
+  # this many listed evidence keys. Stage 3 clamps short-evidence records down to
+  # "medium" in normalized.jsonl; raw.jsonl stays the immutable extraction record.
+  min_evidence_keys_for_high_confidence: 5
+  # Agglomerative clustering materializes the condensed pairwise distance matrix
+  # (n(n-1)/2 float64) over unique terms. Abort with the measurement instead of
+  # thrashing; a vocabulary above this needs a design decision, not a silent
+  # algorithm swap. Measured 2026-08-11: 17,738 skill terms = 1.17 GiB of matrix,
+  # 3.27 GiB peak RSS (scipy holds a working copy), 65 s wall — so process peak
+  # runs ~2.8x the budgeted matrix size.
+  max_pairwise_matrix_gb: 4.0
+  # Canonical terms per kind listed in the human term-review report.
+  report_top_n: 100
+
+projections:
+  recency_half_life_days: 540
+
+retrieval:
+  vector_top_k: 40
+  structured_top_k: 40
+  # Benchmark-v3 lexical arm: the top-N people of the same BM25 ranking the `bm25`
+  # baseline is scored on, unioned into the candidate pool (never fused into it — v2
+  # measured RRF of the two dragging the stronger list down). Measured offline on the
+  # 30 validation cases: at 10 the union's candidate recall rises 0.967 -> 1.000 for a
+  # median of one extra candidate per pool. 0 disables the arm.
+  bm25_top_k: 10
+  rerank_top_k: 32
+  # Roster-restricted vector arm (benchmark only). Neo4j's vector index cannot be
+  # pre-filtered, so the search asks for this many neighbours and the roster filter is
+  # applied to the result. Keep it above the Contribution count (2,666 at the accepted
+  # Stage 5 load) so the restricted arm is the exact roster top-k, not an approximation.
+  roster_vector_pool_k: 4000
+  # Subgraph expansion: contributions carried per candidate into scoring and the
+  # re-rank context. Vector hits first, then contributions demonstrating a matched
+  # term, then the most recent — see query/retrieve.py.
+  contributions_per_person: 8
+  # Candidate view handed to the re-rank prompt (bounds prompt size, and therefore
+  # the pre-call cost estimate, independently of how wide expansion goes). Keys per
+  # contribution bound what the model may cite; validation still checks a citation
+  # against every key that candidate owns.
+  # Contribution summaries are ~450 chars each and dominate the prompt, so this is the
+  # knob that keeps a 15-candidate re-rank inside llm.max_call_cost_usd. Prefer fewer
+  # whole contributions over more truncated ones: a clipped summary misleads the model.
+  rerank_contributions_per_candidate: 4
+  rerank_skills_per_candidate: 10
+  rerank_specializations_per_candidate: 6
+  rerank_evidence_keys_per_contribution: 6
+  # How a candidate is rendered for the re-rank: "profile" is the v1/v2 view above,
+  # "card" the benchmark-v3 fixed-size card — identity, deterministic score, top terms
+  # with recency, a few cite-able keys, and no contribution summaries. The card is what
+  # makes a wider window affordable and what puts the deterministic score in front of
+  # the model. Changing this must change llm.rerank_prompt with it.
+  # "hybrid" (docs/work-orders/rerank-probes.md) spends full profile detail on the head
+  # of the deterministic ordering and keeps everyone else on a card — aimed at telling
+  # close teammates apart, whose cards are near-identical. It is a property of the
+  # window, so it renders through query/rank.py's candidate_views(), never
+  # candidate_view(). Default unchanged: the card is what v3-v4 measured.
+  rerank_candidate_view: "card"
+  # How many of the window's head get the full profile view under the hybrid view.
+  # Inert unless rerank_candidate_view is "hybrid". 8 is the menu's "top ~8", and the
+  # miss decomposition in docs/rerank-probes-report.md is what sizes it: at 8 the head
+  # already contains a truth person in 8 of the 17 top-1 misses, and widening it to 16
+  # reaches only 10 while doubling the added input.
+  rerank_hybrid_detail_top_k: 8
+  # The answer shape the re-rank asks for. "listwise" is the v1-v4 behaviour: one entry
+  # per candidate carrying a reason and citations, which the evidence validator checks.
+  # "permutation" is RankGPT's own output format (arXiv:2304.09542) — an ordering of
+  # person ids and nothing else. A permutation answer makes no claims, so it cannot
+  # carry an uncited one; it also produces no reasons, so it ranks without explaining.
+  # Default unchanged.
+  rerank_mode: "listwise"
+  # Card widths, separate from the profile view's: a card is meant to be short and the
+  # same length for everyone, which is the mechanism (uniform contexts, less
+  # lost-in-the-middle), so it carries fewer terms than the profile view does.
+  card_specializations_per_candidate: 4
+  card_skills_per_candidate: 6
+  card_evidence_keys_per_candidate: 3
+  # Permutation self-consistency (benchmark-v3 lever 4): how many listwise re-rank
+  # samples to run over independently shuffled candidate orders before aggregating by
+  # Borda count. 1 is a single call in deterministic score order — the v1/v2 behaviour.
+  rerank_samples: 1
+  # Strong-model finisher (benchmark-v3 lever 5): how many of the re-ranked head to
+  # hand to llm.finisher_model for one setwise ordering pass. 0 disables it.
+  finisher_top_k: 0
+
+scoring:
+  # Benchmark v2 weighting (was 0.40 / 0.25 / 0.20 / 0.15 for the v1 benchmark).
+  # Chosen on the 30 validation cases from the marginal effect of each component over a
+  # 225-point grid, not from the grid's argmax — see docs/benchmark-v2-config.md:
+  # recency improves every metric monotonically (the person currently working in an
+  # area is the one the next ticket in it goes to), while evidence_strength degrades
+  # Hit@1 and MRR monotonically because it is a volume proxy, and volume alone is the
+  # `most_active` baseline — the weakest of the four.
+  weights:
+    specialization_match: 0.25
+    skill_overlap: 0.30
+    recency: 0.40
+    evidence_strength: 0.05
+  # evidence_strength saturates at this many supporting contributions:
+  # min(1, sqrt(n / full_credit)) — 1 piece ~0.32, 5 ~0.71, 10+ = 1.0.
+  evidence_full_credit_count: 10
+
+# Wave-1 improvement flags (docs/work-orders/improvement-wave1.md, backlog IDs below).
+# Every flag here changes vocabulary, retrieval or ranking behaviour that the retired
+# 120-case test split can no longer validate, so every one of them is default OFF and
+# stays OFF until benchmark v4 (backlog G12) or the MVP pilot can measure it. The
+# defaults are mirrored in src/capgraph/improvements.py, which is the only reader.
+improvements:
+  # G3a — vocabulary frequency gating (Stage 3). A canonical term supported by fewer
+  # than this many distinct contributions stops being canonical and attaches as an
+  # alias to its nearest surviving canonical instead. 0 disables the gate entirely,
+  # which is the vocabulary every current artifact was built with.
+  vocabulary:
+    min_document_frequency: 0
+  # G5 — the extractor's `confidence`, which is stored on every Contribution and has
+  # never reached the score. "component" adds it as a fifth weighted component;
+  # "multiplier" scales `evidence_strength` by it instead; "off" is v1-v3 behaviour.
+  confidence_signal:
+    mode: "off"
+    weight: 0.10
+    # The rubric's three levels mapped onto [0, 1]. High is full credit by definition;
+    # the other two are the backlog's proposal, untuned because there is nothing
+    # trustworthy left to tune them on.
+    values:
+      high: 1.0
+      medium: 0.6
+      low: 0.3
+  # G6 — the extractor's primary/secondary `strength` on a specialization. When on, a
+  # matched specialization counts `secondary_weight` rather than 1.0 in proportion to
+  # how much of its supporting evidence called it secondary. Reads
+  # `primary_evidence_count` off the Stage 4 projection edge; unrelated to
+  # retrieve.py's `structured_strength`, which is a decayed evidence sum.
+  specialization_strength:
+    enabled: false
+    secondary_weight: 0.5
+  # G11a — activity currency: how recently this person did anything at all, as opposed
+  # to how recently they did the matched skill. Decayed at the same half-life as
+  # recency, from the person's last retained bucket. Never a hard exclusion window:
+  # the backlog rejects option (b) and it stays rejected.
+  activity_currency:
+    mode: "off"
+    weight: 0.10
+  # G7 — how the re-rank window is presented when retrieval.rerank_samples is 1.
+  # "score" is the deterministic best-first order v1-v3 sent; "reverse" sends the same
+  # window worst-first, which is the probe that separates "the re-rank is re-expressing
+  # the score" from "the re-rank is following presentation order".
+  rerank_presentation_order: "score"
+  # The G7 probe run itself: its own cost-log stage, its own checkpoint namespace, and
+  # its own ceiling. llm.max_stage_cost_usd ($25) is far too loose for a $2 probe, so
+  # the runner checks this before every chunk of cases rather than once up front.
+  probe_order:
+    stage: "probe_order"
+    runs_subdir: "probe/order"
+    max_total_cost_usd: 2.0
+    # Which frozen v3 validation arm the probe is paired against. ab_window32 is the
+    # adopted configuration run forward-order on the same 30 cases, so the pair differs
+    # by presentation order and one fresh draw of run-to-run variance.
+    baseline_variant: "ab_window32"
+    # Cases per budget re-check. Small enough that the ceiling binds within ~$0.20.
+    chunk_size: 5
+
+eval:
+  n_briefs: 150
+  min_brief_chars: 300     # briefs need enough text to be meaningful
+  seed: 20260713
+  manifest_version: "tawos-v1.1-benchmark-v1"
+  validation_fraction: 0.20
+  hit_at: [1, 5, 10]
+  # Cost-log stage for the benchmark run: separate from the Stage 6 smoke stage, and
+  # not a "_pilot" name, so it draws llm.max_stage_cost_usd rather than the pilot
+  # ceiling. Only the graph system spends; the three baselines make no model call.
+  stage_name: "stage7_eval"
+  # Benchmark v2 (docs/work-orders/benchmark-v2.md): tune on the 30 validation cases,
+  # freeze, run the 120 test cases once. Its runs live in their own checkpoint
+  # namespace so the frozen v1 results stay immutable and the two never mix.
+  v2:
+    runs_subdir: "v2/runs"
+    validation_stage: "stage7b_val"
+    test_stage: "stage7b_test"
+    # Reciprocal-rank fusion (lever 1a). k damps each list's head: small k lets rank 1
+    # dominate, large k flattens the lists toward equal votes. 60 is the standard
+    # default; the grid is what validation was swept over.
+    rrf_k: 60
+    rrf_k_grid: [1, 5, 10, 20, 30, 60, 120, 240]
+    # Weight of the graph ranking against BM25's in the weighted-RRF variant.
+    rrf_graph_weight_grid: [1.0, 1.5, 2.0, 3.0]
+    # Spend discipline for the whole v2 track, across both stages. The order authorized
+    # "< $8, escalate above $10", which llm.max_stage_cost_usd ($25, per stage) is far
+    # too loose to enforce — this ceiling is checked before a split starts.
+    max_total_cost_usd: 8.0
+    # Which paid validation arm the frozen configuration was chosen as. The v2 report
+    # reads the validation split from this arm's namespace; the test split has only the
+    # one frozen run and is read from the namespace itself.
+    frozen_validation_variant: "ab_weights_only"
+    # The paid validation arms, in the order they were run. Each isolates one lever
+    # against the arm above it: ab_weights_only changes only the score weights against
+    # the frozen v1 run, ab_weights_prompt changes only the re-rank prompt against
+    # ab_weights_only.
+    ab_arms: ["ab_weights_only", "ab_weights_prompt"]
+    # The v1 configuration the v2 section is reported against, transcribed from the
+    # frozen v1 record (docs/eval-results.md, digest 01ac985a36e1bb63). Recorded here
+    # rather than in code so the comparison column is auditable, and because live
+    # settings no longer hold these values.
+    v1_baseline:
+      digest: "01ac985a36e1bb63"
+      rerank_prompt: "rerank"
+      rerank_top_k: 15
+      vector_top_k: 40
+      structured_top_k: 40
+      stage: "stage7_eval"
+      weights:
+        specialization_match: 0.40
+        skill_overlap: 0.25
+        recency: 0.20
+        evidence_strength: 0.15
+    # Per-case projection for that pre-flight check, from measurement rather than
+    # padding: v1 spent $0.0362/case on validation and $0.0365/case on test, and the
+    # v2 weights-only validation arm spent $0.0332/case. 0.04 is ~10% above the
+    # dearest of those. A guess loose enough to be safe was also loose enough to
+    # refuse the test split it exists to protect.
+    expected_cost_per_case_usd: 0.04
+  # Benchmark v3 (docs/work-orders/benchmark-v3.md): a lexical retrieval arm, compact
+  # re-rank cards, a wider window, and two paid re-rank levers. Same discipline as v2 —
+  # tune on the 30 validation cases, freeze, run the 120 test cases once — in a third
+  # checkpoint namespace so v1's and v2's runs stay immutable.
+  v3:
+    runs_subdir: "v3/runs"
+    scores_subdir: "v3/scores"
+    validation_stage: "stage7c_val"
+    test_stage: "stage7c_test"
+    # The owner's 2026-08-12 authorization, across both v3 stages combined. Checked
+    # before a split starts, against the logged spend of every v3 stage.
+    max_total_cost_usd: 25.0
+    # The prospective projection is built from the live configuration rather than from
+    # one measured per-case constant, because a v3 arm can triple the re-rank calls:
+    # per case it is intent + roles x (rerank_samples x re-rank + finisher). The
+    # per-call figures below are measured (data/llm_costs.jsonl, 2026-08-12) and
+    # deliberately rounded up, since over-projecting can only refuse a split early.
+    projection:
+      roles_per_case: 1.2            # measured: 135 re-rank calls over 120 test cases
+      intent_call_usd: 0.004         # measured: 2,740 in / 178 out on terra
+      rerank_profile_call_usd: 0.030 # measured: 18,556 in / 1,911 out at window 15
+      rerank_card_call_usd: 0.030    # cards halve the input; window 32 doubles output
+      finisher_call_usd: 0.030       # 5 cards on sol at $5/$30 per MTok
+    # The paid validation arms in the order they were run; each isolates one lever
+    # against the arm above it. Recorded here so the report's A/B table is generated
+    # from the run plan rather than transcribed into it.
+    ab_arms: ["ab_lexical", "ab_cards", "ab_window32", "ab_selfconsistency", "ab_finisher"]
+    # Which arm the frozen configuration was chosen as; the v3 report reads the
+    # validation split from that arm's namespace.
+    frozen_validation_variant: "ab_window32"
+    # The v2 configuration the v3 section is reported against, transcribed from the
+    # frozen v2 record (docs/benchmark-v2-config.md, digest 653bcac738e64feb).
+    v2_baseline:
+      digest: "653bcac738e64feb"
+      rerank_prompt: "rerank"
+      rerank_candidate_view: "profile"
+      rerank_top_k: 15
+      vector_top_k: 40
+      structured_top_k: 40
+      bm25_top_k: 0
+      rerank_samples: 1
+      finisher_top_k: 0
+      validation_stage: "stage7b_val"
+      test_stage: "stage7b_test"
+    # Paired per-query statistics. The bootstrap is seeded so the reported interval is
+    # reproducible; McNemar's exact test needs no parameters.
+    bootstrap_resamples: 10000
+    bootstrap_seed: 20260812
+  # Benchmark v4 (docs/work-orders/benchmark-v4.md): the instrument changes, not the
+  # tuning. A case is a *work package* — one sprint, asked at its recorded start date —
+  # whose brief is written from the issues planned into it before it started and whose
+  # truth is everyone who resolved its issues from that moment on. It is a different
+  # benchmark, not a fourth configuration of the old one, so it gets its own manifest,
+  # its own version, its own seed, and its own checkpoint namespace, and no v4 number is
+  # ever a comparable row next to v1-v3's. See docs/benchmark-v4-manifest.md.
+  v4:
+    manifest_version: "tawos-v1.1-benchmark-v4"
+    seed: 20260814
+    # Verified against the dump before it was chosen (docs/benchmark-v4-manifest.md):
+    # epic->child hierarchy *is* recoverable from the change log, but an epic has no
+    # start boundary with work already planned into it, and a sprint has both.
+    grouping_unit: "sprint"
+    n_packages: 150
+    validation_fraction: 0.20
+    # A package needs enough pre-as-of issues to describe a body of work rather than a
+    # task, and enough text to be a brief at all.
+    min_brief_issues: 3
+    min_brief_chars: 300
+    # Bounds on what the rewriter and every later prompt read. Issues are added whole,
+    # in creation order, until one of these limits would be crossed; what was left out
+    # is recorded per case in the manifest.
+    max_brief_issues: 30
+    max_brief_chars: 8000
+    # A rewrite shorter than this is a refusal or a truncation, not a brief.
+    min_rewritten_chars: 200
+    runs_subdir: "v4/runs"
+    rewrites_path: "v4/rewrites.jsonl"
+    rewrite_stage: "bench4_rewrite"
+    # The owner's instruction: the cheap model does the rewriting.
+    rewrite_model: "openai/gpt-5.6-luna"
+    rewrite_prompt: "brief_rewrite"
+    rewrite_max_output_tokens: 600
+    validation_stage: "bench4_val"
+    test_stage: "bench4_test"
+    # The owner's 2026-08-14 authorization, across all three bench4_* stages combined.
+    # Checked before a split starts against the logged spend of all three.
+    max_total_cost_usd: 15.0
+    # Prospective per-case projection, rounded up from measurement. Package briefs are
+    # longer than v1's single-ticket briefs and parse into more roles, and a role is a
+    # re-rank call, so roles_per_case is the term that decides whether a split fits.
+    # Measured on the 28 validation cases of each arm (2026-08-14):
+    #   v3frozen, rewritten briefs: 1.82 roles/case, $0.0569/case
+    #   v2frozen, rewritten briefs: 2.00 roles/case, $0.0675/case
+    #   v3frozen, RAW briefs:       3.89 roles/case, $0.1195/case  <- not run on test
+    # The figures below sit ~9% above the dearest arm this projection is used to gate
+    # (the rewritten test run). The raw variant costs about twice as much per case,
+    # because its brief is five times longer and parses into twice as many roles; if a
+    # raw split is ever run, re-measure before trusting this.
+    projection:
+      roles_per_case: 2.0
+      intent_call_usd: 0.006
+      rerank_call_usd: 0.028
+    # The two frozen engine configurations measured on this manifest, as overrides on
+    # the live settings. v3frozen is the current default and overrides nothing; v2frozen
+    # restores the four settings v3 changed, transcribed from eval.v3.v2_baseline.
+    engine_configs:
+      v3frozen: {}
+      v2frozen:
+        retrieval.rerank_candidate_view: "profile"
+        retrieval.rerank_top_k: 15
+        retrieval.bm25_top_k: 0
+        llm.rerank_prompt: "rerank"
+  # Re-rank prompt redesign (docs/work-orders/rerank-redesign.md). The G7 finding is
+  # that presentation order dominates the re-rank, so the study varies exactly one
+  # thing — the re-rank stage — over *pinned* retrieval: the intent parses, candidate
+  # pools and deterministic scores are captured once and replayed byte-identically into
+  # every arm.
+  #
+  # The work order assumed the frozen v4 validation run could serve as the free
+  # "current prompt, ordered" baseline. It cannot: that run never checkpointed its
+  # intent parses, and re-parsing does not reproduce them (measured 2026-08-15 — 4 of
+  # 28 cases parse to the same role names, 2 of 28 to the same candidate pool, 0 of 28
+  # to the same deterministic ranking; median pool Jaccard 0.83). The ordered
+  # current-prompt arm is therefore a paid arm like the others, and the frozen run is
+  # kept only as a diagnostic showing why. Escalated to the orchestrator 2026-08-15.
+  rerank_redesign:
+    # The v4 namespace this study pins to and is compared against. No other split,
+    # engine or brief variant is readable from this module: the v4 test split's
+    # exposure budget belongs to a later freeze order.
+    split: "validation"
+    engine: "v3frozen"
+    brief_variant: "rewritten"
+    stage: "rerank_redesign"
+    # The owner's authorization for the whole study, checked before every chunk of
+    # cases. llm.max_stage_cost_usd ($25) cannot enforce a ceiling this small.
+    # Authorized at $6 on 2026-08-15 for three paid arms against a free baseline;
+    # raised to $7.50 the same day, on the escalation above, once the baseline turned
+    # out to need paying for too; raised to $8.00 after the arms were measured rather
+    # than projected. At 54 pinned re-rank calls per arm the four arms cost $1.51 +
+    # $1.51 (rerank_cards) + $2.03 + $2.03 (the redesign, whose per-candidate
+    # assessment array adds ~1,200 output tokens per call) plus $0.16 of pin capture
+    # and $0.19 of a superseded first draft of the redesigned prompt = $7.44. The
+    # remainder is retry headroom.
+    max_total_cost_usd: 8.0
+    pin_subdir: "rerank_redesign/pin"
+    runs_subdir: "rerank_redesign/runs"
+    # Cases per budget re-check, and per pin-capture chunk.
+    chunk_size: 4
+    # Prospective per-call projection, measured on this study's own first cases
+    # (data/llm_costs.jsonl, 2026-08-15): intent $0.0055/call over the 28-case pin
+    # capture; re-rank $0.0280/call under `rerank_cards` and $0.0376/call under the
+    # redesign, which answers with a per-candidate assessment line as well as the
+    # ranking. The guard projects every arm at the dearer of the two, because
+    # over-projecting can only refuse a chunk early — the safe direction.
+    projection:
+      intent_call_usd: 0.006
+      rerank_call_usd: 0.038
+    # The arms, in the order the work order runs them. Every arm replays the same
+    # pinned retrieval and differs only in which prompt ranks it and in which order the
+    # window is presented — the two re-rank-stage settings this study varies. `prompt`
+    # names a prompts/*.md file; `order` is the G7 flag value; `reference` marks the arm
+    # the others are compared against (the current prompt in its normal order).
+    #
+    # `output_tokens_per_candidate` overrides llm.rerank_output_tokens_per_candidate for
+    # that arm only. The redesign answers with a per-candidate assessment line *and* the
+    # ranking, so its answer is longer: measured on the first two cases, 4,475-5,380
+    # output tokens against the default allowance of 900 + 140 x 32 = 5,380, and one
+    # call truncated mid-JSON and paid for a full retry. 160 lifts the allowance to the
+    # llm.rerank_max_output_tokens cap of 6,000, whose worst-case cost still fits
+    # llm.max_call_cost_usd. It changes what a truncation costs, not what a normal
+    # answer costs — billing is on tokens produced. The two rerank_cards arms keep the
+    # default: their answers run ~2,700 tokens, so the allowance never binds for them.
+    arms:
+      - name: "baseline"
+        prompt: "rerank_cards"
+        order: "score"
+        label: "current prompt, ordered"
+        reference: true
+      - name: "A"
+        prompt: "rerank_cards"
+        order: "reverse"
+        label: "current prompt, reversed"
+        reference: false
+      - name: "B"
+        prompt: "rerank_evidence_first"
+        order: "score"
+        label: "redesigned prompt, ordered"
+        reference: false
+        output_tokens_per_candidate: 160
+      - name: "C"
+        prompt: "rerank_evidence_first"
+        order: "reverse"
+        label: "redesigned prompt, reversed"
+        reference: false
+        output_tokens_per_candidate: 160
+  # Deterministic-side sweeps (docs/work-orders/deterministic-sweeps.md): benchmark
+  # v4's own noise floor, plus the two adopted-but-dark wave-1 levers that attack the
+  # deterministic ordering — G3a (vocabulary document-frequency floor) and G6
+  # (primary/secondary specialization strength).
+  #
+  # The generalized pinning rule from the rerank-redesign acceptance applies: every arm
+  # replays the *same checkpointed intent parses* (`source_pin` below), so intent never
+  # varies between arms. Retrieval and scoring then vary only through the lever under
+  # test — and where a lever legitimately moves the pools (G3a), the pool diff is
+  # reported as the lever's retrieval effect rather than hidden.
+  sweeps:
+    split: "validation"
+    engine: "v3frozen"
+    brief_variant: "rewritten"
+    # The rerank-redesign study's pin, reused read-only. Its `intent` blocks are the
+    # parses every condition here replays; nothing in this study writes to it.
+    source_pin: "rerank_redesign/pin"
+    # The rerank-redesign arm the noise floor repeats, and where its records are read
+    # back from. The repeat uses that arm's own prompt and order, taken from
+    # eval.rerank_redesign.arms rather than restated here, so "identical prompt, order"
+    # is structural instead of a copied string.
+    baseline_runs_subdir: "rerank_redesign/runs"
+    # Every checkpoint this study writes lives under here. Frozen namespaces (v1-v4,
+    # rerank_redesign) are never written to.
+    root_subdir: "sweeps"
+    stages:
+      # One pinned-pool repeat of the baseline arm: model-only variance on this
+      # instrument, and the gauge every other comparison in the study is read against.
+      noise_floor: "noise_floor"
+      # The conditional tier-2 full-system arms, if their offline gates pass.
+      paid: "sweep_val"
+    # The owner's 2026-08-15 authorization for the whole study, across BOTH stages
+    # above. Checked before every chunk of cases, because llm.max_stage_cost_usd ($25,
+    # and per stage) cannot enforce a ceiling this small across two stage names.
+    max_total_cost_usd: 8.0
+    chunk_size: 4
+    # Measured on the rerank-redesign arms (data/llm_costs.jsonl, 2026-08-15):
+    # $0.0280/call under `rerank_cards`. Projected at the dearer redesign figure, since
+    # over-projecting can only refuse a chunk early — the safe direction.
+    projection:
+      rerank_call_usd: 0.038
+    # G3a needs a graph built on the gated vocabulary. Rather than put the shared graph
+    # into a study state and restore it, the study graph lives in a throwaway second
+    # Neo4j container (approved 2026-08-15, recorded in the work order). The production
+    # graph is never written to by this study.
+    study_graph:
+      uri: "bolt://localhost:7688"
+      container: "capgraph-sweeps-neo4j"
+      volume: "capgraph_sweeps_neo4j_data"
+      http_port: 7475
+      bolt_port: 7688
+      image: "neo4j:5-community"
+      # Study-namespace Stage 3/4 outputs, under data/eval/sweeps/. Production
+      # data/contributions/ is read (raw.jsonl, the embedding cache) and never written.
+      artifacts_subdir: "study_artifacts"
+    # The production graph as the work order records it. Verified at both ends of the
+    # study by observation — the study never writes to this graph, so these are a
+    # no-change check, not a restoration check.
+    production_graph_counts:
+      Person: 316
+      Contribution: 2666
+      Skill: 10630
+      HAS_SKILL: 17589
+      HAS_SPECIALIZATION: 2361
+    # The offline conditions, each a graph plus a set of improvement-flag overrides.
+    # `base` is the control: production graph, every flag at its default, which must
+    # reproduce the source pin's pools exactly — that agreement is what licenses reading
+    # any other condition's pool diff as the lever's effect. Flags are applied through
+    # capgraph.improvements.overridden, so nothing in config/settings.yaml changes and no
+    # default is flipped.
+    conditions:
+      - name: "base"
+        label: "flags off, production graph (the control)"
+        graph: "production"
+        flags: {}
+      - name: "g3a_df3"
+        label: "G3a: vocabulary document-frequency floor 3"
+        graph: "study"
+        flags:
+          improvements.vocabulary.min_document_frequency: 3
+      - name: "g6_strength"
+        label: "G6: strength-weighted specialization match"
+        graph: "production"
+        flags:
+          improvements.specialization_strength.enabled: true
+  # The final weights round (docs/work-orders/weights-round.md). The sweeps study closed
+  # both of its levers and left one lead: its G6 *control* — a flat down-weighting of
+  # specialization_match — moved the offline deterministic arm 0.143 -> 0.214 Hit@1 on a
+  # constant fitted to those same 28 cases. That is a lead about a weight, so this round
+  # sweeps the weights properly.
+  #
+  # Tier 0 spends nothing: the sweeps study checkpointed every candidate's score
+  # *components* under pinned parses, so any weight vector is re-scored exactly through
+  # query/rank.py's own combine_parts. The two stage names below exist so the ledger can
+  # be reconciled against them — and shown empty when a gate stops.
+  weights_round:
+    split: "validation"
+    # The checkpointed components every vector is re-scored from: the sweeps study's
+    # flags-off control, whose replay reproduced its source pin on all 28 cases. A
+    # lever's condition is refused — re-scoring one would measure lever and weights
+    # together, which is the cross-run confound the rerank-redesign acceptance made a
+    # standing rule against.
+    source_study: "sweeps"
+    source_condition: "base"
+    # The rerank-redesign reference arm, read-only: who the paid re-rank actually
+    # ranked first, per case. A retune can force the full system to change its answer
+    # only by taking that person out of the window, so this is measured, not assumed.
+    baseline_runs_subdir: "rerank_redesign/runs"
+    root_subdir: "weights"
+    stages:
+      # ONE paid validation arm, if gate 1 passes.
+      val: "weights_val"
+      # ONE test-split run, if gate 2 passes AND the orchestrator says go. This is the
+      # second and final planned exposure of the v4 test split.
+      test: "weights_test"
+    # The owner's 2026-08-15 authorization across BOTH stages above.
+    max_total_cost_usd: 10.0
+    projection:
+      rerank_call_usd: 0.038
+    # Benchmark v2's selection recipe as parameters rather than as an answer: read each
+    # component's marginal effect over a coarse grid, move ONE step out of the component
+    # whose marginal points down into the one whose marginal points up, and adopt only
+    # what sits inside a plateau. Never the best row of a 28-case grid.
+    selection:
+      step: 0.05
+      target_metric: "hit_at_1"
+      # The neighbourhood the adopted vector has to sit inside: +-0.05 on each
+      # component, which is v2's own robustness check re-centred on the current weights.
+      plateau:
+        specialization_match: [0.15, 0.20, 0.25]
+        skill_overlap: [0.25, 0.30, 0.35]
+        recency: [0.40, 0.45, 0.50]
+        evidence_strength: [0.00, 0.05, 0.10]
+      # The wider mechanism direction — everything a defensible retune of these weights
+      # could reach — swept for whether ANY of it changes who the re-rank is shown.
+      neighbourhood:
+        specialization_match: [0.00, 0.05, 0.10, 0.15, 0.20, 0.25]
+        skill_overlap: [0.25, 0.30, 0.35]
+        recency: [0.35, 0.40, 0.45, 0.50, 0.55]
+        evidence_strength: [0.00, 0.05, 0.10]
+      # The whole simplex, coarsely. This is what makes a stop at tier 0 a proof rather
+      # than a guess: the upper bound on what any weighting at all could do to window
+      # membership, enumerated instead of estimated.
+      simplex_levels: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0]
+  # Re-rank probes (docs/work-orders/rerank-probes.md). The owner re-opened re-rank
+  # exploration on 2026-08-16 against one failure bucket: the top-1 misses where a
+  # correct person WAS inside the 32-card window and was ranked too low. On the pinned
+  # validation split that is 17 of 17 misses — retrieval loses none of them.
+  #
+  # This study captures no retrieval. It replays the rerank-redesign pin read-only and
+  # pairs every arm against that study's baseline arm, whose checkpoint is also read
+  # read-only and never re-paid for. What an arm may vary is the re-rank stage: prompt,
+  # model, candidate view, answer mode, presentation order.
+  rerank_probes:
+    split: "validation"
+    engine: "v3frozen"
+    brief_variant: "rewritten"
+    stage: "rerank_probes"
+    # The rerank-redesign study's pin and reference arm, both read-only. Named rather
+    # than restated, so "the same pin, the same baseline" is structural.
+    source_pin: "rerank_redesign/pin"
+    baseline_arm: "baseline"
+    root_subdir: "rerank_probes"
+    chunk_size: 4
+    # The owner's 2026-08-16 authorization for the whole study, checked before every
+    # chunk of cases. llm.max_stage_cost_usd ($25) cannot enforce a ceiling this small.
+    max_total_cost_usd: 15.0
+    # Fallback projection when an arm does not carry its own. Every arm below does.
+    projection:
+      rerank_call_usd: 0.038
+    # The arms, each pre-registered in docs/rerank-probes-report.md before its first
+    # call (enforced: run_arm refuses an arm with no pre-registration section). At most
+    # four paid arms, with a sequencing gate after two.
+    #
+    # `projected_call_usd` is measured, not guessed: the baseline arm's 54 calls logged
+    # a mean of 9,776 input and 3,272 output tokens (data/llm_costs.jsonl), and each
+    # arm's projection is that shape re-priced for its model and its input size, which
+    # was rendered offline from the pin before any arm ran.
+    arms:
+      - name: "S1"
+        label: "strong model, full window, permutation answer"
+        method: "listwise permutation generation, stronger model"
+        citation: "RankGPT, arXiv:2304.09542"
+        prompt: "rerank_permutation"
+        model: "openai/gpt-5.6-sol"
+        mode: "permutation"
+        order: "score"
+        reorder_only: true
+        # The work order's scoped raise, for this arm's calls only. The widest card
+        # window estimates 8,790 input tokens = $0.0439 at sol's $5/MTok, and the
+        # permutation allowance of 3,000 output tokens costs $0.09 at $30/MTok, so the
+        # worst-case pre-call estimate is $0.1339 — inside the $0.15 authorized, and
+        # refused by the gateway if a wider window ever pushed it out.
+        max_call_cost_usd: 0.15
+        # A permutation answer is ~30 ids (~250 tokens); the rest is a reasoning model's
+        # billed reasoning, which this project has only ever measured on the 5-card
+        # finisher (mean 317, max 685 output tokens). 1,200 is that scaled to a 32-card
+        # decision and is a projection, not a measurement — the first chunk of this arm
+        # is what turns it into one, and the guard re-checks before every chunk.
+        expected_output_tokens: 1200
+        projected_call_usd: 0.11
+      - name: "S2"
+        label: "rich evidence for the head, cards for the tail"
+        method: "hybrid card, full contribution detail for the top 8"
+        citation: "SumRank direction, arXiv:2603.24204"
+        prompt: "rerank_hybrid_cards"
+        view: "hybrid"
+        hybrid_detail_top_k: 8
+        order: "score"
+        reorder_only: false
+        # Same model and answer shape as the baseline, so the default $0.05 per-call
+        # ceiling applies unchanged. Rendered offline from the pin: mean 16,607 input
+        # tokens against the baseline's 8,131, so $0.0166 input + $0.0196 output at
+        # terra's $1/$6 per MTok.
+        expected_output_tokens: 3272
+        projected_call_usd: 0.045
+  # Near-miss quality study (docs/work-orders/nearmiss-study.md). One question, asked
+  # once: when the system's top pick is not in the labeled truth set, is that person in
+  # the same capability neighbourhood as someone who is, or a genuine error?
+  #
+  # The frozen v4 manifest and every v4 run checkpoint were lost on 2026-08-16
+  # (docs/incident-2026-08-16-data-loss.md), so this study rebuilds the manifest
+  # *structure* offline — deterministic from the same Stage 0 parquet — and pays for the
+  # 28 validation briefs only. That makes it a **sibling** of the frozen manifest, not
+  # the frozen manifest: same cases, same truth, re-generated rewrite text. The name
+  # says so, in the file name and in the version string, so no reader can mistake one
+  # for the other and no run of this manifest can be scored against a v4 checkpoint.
+  #
+  # The test split's rows are built (they are the sprint calendar the adjacent-sprint
+  # diagnostic reads) and are deliberately left without a purchased rewrite: their
+  # `query_text` is empty, which makes an accidental test run fail at the harness's
+  # query-context check rather than quietly consume the reserved exposure.
+  nearmiss:
+    # Everything this study writes lives under data/eval/<root_subdir>/. The frozen
+    # namespaces (v1-v4, rerank_redesign, sweeps, probes) and the concurrent
+    # incident-restoration order's territory are never written to.
+    root_subdir: "nearmiss"
+    manifest_filename: "benchmark_manifest.v4-sibling-nearmiss.jsonl"
+    # Distinct from eval.v4.manifest_version on purpose: query_context refuses a case
+    # whose manifest version is not the one the caller asked for, so this string is what
+    # keeps a sibling run and a v4 run from ever being scored together.
+    manifest_version: "tawos-v1.1-benchmark-v4-sibling-nearmiss"
+    rewrites_filename: "rewrites.jsonl"
+    runs_subdir: "nearmiss/runs"
+    rewrite_stage: "nearmiss_rewrite"
+    validation_stage: "nearmiss_val"
+    # The owner's 2026-08-17 authorization for the whole study, across both stages.
+    # llm.max_stage_cost_usd ($25) cannot enforce a ceiling this small.
+    max_total_cost_usd: 4.0
+    split: "validation"
+    engine: "v3frozen"
+    brief_variant: "rewritten"
+    # Prospective per-case projection for the one paid run, from the v4 measurement of
+    # this exact arm (docs/benchmark-v4-manifest.md §6.4: v3frozen/rewritten spent
+    # $0.0569/case at 1.82 roles/case). Rounded up, as everywhere else here, because
+    # over-projecting can only refuse the run early.
+    projection:
+      roles_per_case: 2.0
+      intent_call_usd: 0.006
+      rerank_call_usd: 0.028
+    # The published record the rebuilt validation split must reproduce
+    # (docs/benchmark-v4-manifest.md §6.2). A mismatch is an escalation, not a warning:
+    # if the structure drifted, nothing measured on it can be reported as v4's cases.
+    expected_validation:
+      cases: 28
+      projects:
+        DM: 15
+        TIMOB: 6
+        MESOS: 6
+        FAB: 1
+      mean_truth_set_size: 3.39
+      # The record quotes two decimals, so the check is on the rounded value.
+      mean_truth_set_decimals: 2
+    # The rest of the published record (§6.1, §6.2, §6.3). Verifying the whole structure
+    # rather than only the slice this study runs is what makes "the same cases" a
+    # checkable claim: if the sampling had drifted, the validation split could still come
+    # out 28 cases while holding different sprints.
+    expected_structure:
+      candidates: 1061
+      selected: 150
+      exclusion_reasons:
+        sprint_start_not_post_cutoff: 760
+        nothing_planned_before_start: 115
+        too_few_brief_issues: 18
+        sprint_start_missing: 10
+        no_truth_resolver: 1
+        sampled_out: 7
+      truth_people_total: 631
+      truth_people_dropped_ineligible: 502
+      briefs_hitting_a_cap: 59
+      test_cases: 122
+      test_projects:
+        DM: 64
+        TIMOB: 28
+        MESOS: 26
+        FAB: 4
+      test_mean_truth_set_size: 4.39
+    # The pre-specified metrics (work order "Pre-specified metrics"). These are the
+    # only knobs they have, and they are fixed here before the run so they cannot be
+    # chosen after seeing the answer.
+    metrics:
+      # Definition (b): how many of a person's skills, ranked by evidence_count x
+      # decay(last_used) recomputed at the case's as-of time, the Jaccard is taken over.
+      top_skills: 10
+      # The control: draws of one random member of the case's own frozen roster, whose
+      # median is the reference every similarity number is read against. Drawn with
+      # replacement from the whole roster — the work order says "a random eligible
+      # roster member", with no carve-out for truth members, and the median of 100 is
+      # what keeps an occasional truth draw from moving the reference.
+      control_draws: 100
+      control_seed: 20260817
+      # Bootstrap over cases for every interval reported. Seeded, so the intervals are
+      # reproducible from the checkpoint.
+      bootstrap_resamples: 10000
+      bootstrap_seed: 20260817
+      # Context for the adjacent-sprint diagnostic, not a metric: how many other sprints
+      # in the same project start within this many days either side of a given sprint's
+      # start. It is the evidence that a project runs several boards at once, and
+      # therefore that "the project's next sprint by date" is often another team's. One
+      # week, because that is shorter than any sprint in this corpus, so a sprint starting
+      # inside the window is a genuinely concurrent one rather than the same board's next.
+      concurrent_window_days: 7
+  baselines:
+    # BM25 Okapi over one concatenated pre-cutoff evidence document per person
+    # (rank_bm25 defaults, stated here so they are not implicit).
+    bm25_k1: 1.5
+    bm25_b: 0.75
+    # Pure-vector baseline: per-ticket embeddings of the same evidence text. A person
+    # scores as their single nearest ticket, so a specialist is not diluted by volume.
+    vector_person_score: "max"
+    embedding_batch_size: 256

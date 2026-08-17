@@ -1,0 +1,39 @@
+# Local configuration and Python build/test artifacts
+.env*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# TAWOS is a large, externally versioned dataset. Keep only provenance in source control.
+data/raw/*
+!data/raw/.gitkeep
+
+# Generated pipeline and benchmark artifacts. Keep the reproducible all-project
+# selection report reviewable; normalized parquet and MySQL cross-checks stay local.
+data/parquet/*
+!data/parquet/slice_report.csv
+!data/parquet/slice_report.md
+!data/parquet/slice_report.metadata.json
+data/buckets/
+# Curated term-review judgments are configuration and live in config/term_overrides.yaml.
+data/contributions/
+data/eval/
+data/llm_costs*.jsonl
+
+# Local notebook conversion output, and the subgraph the demo renders
+notebooks/*.ipynb
+notebooks/*.html
+
+# Never track anything under data/ except the explicit slice-report exceptions below.
+# (2026-08-16 incident: committed symlinks under data/ clobbered real ignored dirs on merge.)
+data/**
+!data/parquet/
+!data/parquet/slice_report.csv
+!data/parquet/slice_report.md
+!data/parquet/slice_report.metadata.json
+!data/raw/
+!data/raw/.gitkeep

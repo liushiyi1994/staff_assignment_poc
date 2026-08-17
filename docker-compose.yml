@@ -1,0 +1,30 @@
+services:
+  neo4j:
+    image: neo4j:5-community
+    ports:
+      - "7474:7474"   # browser
+      - "7687:7687"   # bolt
+    environment:
+      NEO4J_AUTH: neo4j/capgraph-local
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_memory_heap_max__size: 2G
+    volumes:
+      - neo4j_data:/data
+
+  mysql:
+    # Only needed for the one-time TAWOS dump restore (stage 0 exports to parquet).
+    # Safe to `docker compose stop mysql` after stage0 completes.
+    image: mysql:8.4.10
+    ports:
+      - "127.0.0.1:3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: capgraph-local
+      MYSQL_DATABASE: tawos
+    command: --max_allowed_packet=1G
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./data/raw:/dump:ro
+
+volumes:
+  neo4j_data:
+  mysql_data:

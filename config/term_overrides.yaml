@@ -1,0 +1,26 @@
+# Manual term-review overrides for Stage 3 normalization.
+#   never_merge: [["java", "javascript"]]   — pairs that must not share a cluster
+#   force_alias: {"k8s": "Kubernetes"}      — raw term (lowercased) -> canonical
+#
+# Orchestrator term review 2026-08-11 (docs/work-orders/stage3-normalize.md):
+# split the two bad merges found in the top-100 — the 32-term "Mesos resource
+# providers" grab-bag and the containerizer-type merge — by re-pointing the
+# mis-clustered terms at truthful canonicals.
+
+never_merge: []
+
+force_alias:
+  "apache mesos": "Apache Mesos"
+  "apache mesos master": "Apache Mesos"
+  "mesos http api": "Mesos HTTP API"
+  "mesos http api design": "Mesos HTTP API"
+  "mesos http adapter": "Mesos HTTP API"
+  "mesos operator api": "Mesos Operator API"
+  "mesos operator v1 api": "Mesos Operator API"
+  "mesos v1 operator api": "Mesos Operator API"
+  "mesos networking": "Mesos networking"
+  "mesos networking documentation": "Mesos networking"
+  "unified containerizer": "Unified containerizer"
+  "universal containerizer": "Unified containerizer"
+  "external containerizer": "External containerizer"
+  "composing containerizer": "Composing containerizer"
