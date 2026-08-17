@@ -143,6 +143,17 @@ data root — worktree data is ephemeral (this study's raw runs died with its
 auto-cleaned worktree; the committed per-case table preserves everything).
 
 Still open: `docs/work-orders/incident-restoration.md` (report pending).
+
+**Public-release prep (2026-08-17, owner-directed):** internal system names
+scrubbed from three docs; remote history replaced with a single-root public
+commit; all remote agent/* branches deleted. The full commit history lives
+ONLY locally: branch `private-history` and the bundle
+`../staff_poc_full_history_2026-08-17.bundle`. **Critical rule: every branch
+created before this date (including the in-flight incident-restoration
+branch) is based on the old root — its changes must be CHERRY-PICKED onto
+the new main, never merged, or the entire pre-scrub history returns to the
+public remote.** Before the owner flips visibility to public: verify the
+remote still has only `main`, and no old-root branch has been re-pushed.
 After it: **the MVP phase decision** per
 `docs/direction-decision.md` — fresh branch or repo, own scope/acceptance
 record, PRD as the anchor. Parked: G4 multi-vector, G9 graph proof,
